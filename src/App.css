@@ -366,6 +366,82 @@ h2 {
   margin-bottom: 8px;
 }
 
+/* Platforms page */
+.platforms-page {
+  max-width: 600px;
+}
+
+.platform-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  margin-top: 16px;
+}
+
+.platform-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.platform-name {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.platform-status {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-weight: 600;
+}
+
+.platform-status.ok {
+  background: #4ecca333;
+  color: var(--accent);
+}
+
+.platform-status.warn {
+  background: #e74c3c33;
+  color: #e74c3c;
+}
+
+.platform-detail {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+
+.platform-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.platform-actions button {
+  padding: 8px 16px;
+  background: var(--accent);
+  color: #1a1a2e;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.platform-actions button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.platform-msg {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
 /* Import local GPX */
 .import-box {
   margin-bottom: 12px;

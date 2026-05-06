@@ -1,6 +1,13 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
+
+const DB_PATH: &str = "data/runbridge.db";
+const GPX_DIR: &str = "data/gpx";
+
+// ── Project root detection ────────────────────────────────────
 
 fn project_root() -> Result<PathBuf, String> {
     let current = std::env::current_dir().map_err(|e| e.to_string())?;
@@ -17,9 +24,6 @@ fn project_root() -> Result<PathBuf, String> {
     }
     Err("Cannot find project root (running_page/ not found)".to_string())
 }
-
-const DB_PATH: &str = "data/runbridge.db";
-const GPX_DIR: &str = "data/gpx";
 
 // ── Data models ───────────────────────────────────────────────
 
@@ -44,6 +48,17 @@ pub struct ActivityFilter {
     pub date_to: Option<String>,
     pub distance_min: Option<f64>,
     pub distance_max: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct StravaConfig {
+    pub client_id: String,
+    pub client_secret: String,
+    pub refresh_token: Option<String>,
+    pub access_token: Option<String>,
+    pub expires_at: Option<i64>,
+    pub athlete_id: Option<String>,
+    pub authorized: bool,
 }
 
 #[derive(Debug)]
@@ -85,6 +100,24 @@ fn db_conn() -> Result<rusqlite::Connection, String> {
         [],
     )
     .map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS platforms (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform TEXT NOT NULL UNIQUE,
+            client_id TEXT,
+            client_secret TEXT,
+            refresh_token TEXT,
+            access_token TEXT,
+            expires_at INTEGER,
+            athlete_id TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+
     Ok(conn)
 }
 
@@ -118,7 +151,6 @@ fn parse_gpx_file(path: &Path) -> Result<ActivityMeta, String> {
                 continue;
             }
 
-            // start time from first point with time
             if start_time.is_none() {
                 if let Some(t) = points.first().and_then(|p| p.time) {
                     start_time = Some(t.format().map_err(|e| format!("time format: {}", e))?);
@@ -129,7 +161,6 @@ fn parse_gpx_file(path: &Path) -> Result<ActivityMeta, String> {
                 let prev = &points[i - 1];
                 let curr = &points[i];
 
-                // elevation gain
                 if let (Some(pe), Some(ce)) = (prev.elevation, curr.elevation) {
                     let diff = ce - pe;
                     if diff > 0.0 {
@@ -137,7 +168,6 @@ fn parse_gpx_file(path: &Path) -> Result<ActivityMeta, String> {
                     }
                 }
 
-                // distance
                 let (plat, plon) = (prev.point().y(), prev.point().x());
                 let (clat, clon) = (curr.point().y(), curr.point().x());
                 total_distance += haversine(plat, plon, clat, clon);
@@ -175,22 +205,19 @@ fn parse_gpx_file(path: &Path) -> Result<ActivityMeta, String> {
     })
 }
 
-// ── Import GPX from running_page output ───────────────────────
+// ── Import GPX from dir ───────────────────────────────────────
 
 fn import_gpx_from_dir(source: &str, dir: &Path) -> Result<Vec<Activity>, String> {
-    eprintln!("[DEBUG] import_gpx_from_dir: source={}, dir={}", source, dir.display());
     let conn = db_conn()?;
     let mut imported = Vec::new();
 
     let entries = std::fs::read_dir(dir).map_err(|e| e.to_string())?;
-    let mut count = 0;
     for entry in entries {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
         if path.extension() != Some(std::ffi::OsStr::new("gpx")) {
             continue;
         }
-        count += 1;
 
         let stem = path
             .file_stem()
@@ -198,9 +225,7 @@ fn import_gpx_from_dir(source: &str, dir: &Path) -> Result<Vec<Activity>, String
             .to_string_lossy()
             .to_string();
         let external_id = stem.clone();
-        eprintln!("[DEBUG] found gpx: {} external_id={}", path.display(), external_id);
 
-        // skip if already imported
         let exists: bool = conn
             .query_row(
                 "SELECT 1 FROM activities WHERE source = ?1 AND external_id = ?2 AND is_deleted = 0 LIMIT 1",
@@ -209,21 +234,14 @@ fn import_gpx_from_dir(source: &str, dir: &Path) -> Result<Vec<Activity>, String
             )
             .unwrap_or(false);
         if exists {
-            eprintln!("[DEBUG] already exists, skip");
             continue;
         }
 
-        // parse GPX
         let meta = match parse_gpx_file(&path) {
             Ok(m) => m,
-            Err(e) => {
-                eprintln!("[DEBUG] parse_gpx_file failed for {}: {}", path.display(), e);
-                continue;
-            }
+            Err(_) => continue,
         };
-        eprintln!("[DEBUG] parsed: dist={:?} elev={:?} time={:?}", meta.distance_m, meta.elevation_gain_m, meta.start_time);
 
-        // copy into data/gpx/
         let new_name = format!("{}_{}.gpx", source, external_id);
         let new_path = PathBuf::from(GPX_DIR).join(&new_name);
         std::fs::copy(&path, &new_path).map_err(|e| e.to_string())?;
@@ -250,7 +268,6 @@ fn import_gpx_from_dir(source: &str, dir: &Path) -> Result<Vec<Activity>, String
         .map_err(|e| e.to_string())?;
 
         if conn.last_insert_rowid() != 0 {
-            eprintln!("[DEBUG] inserted id={}", conn.last_insert_rowid());
             imported.push(Activity {
                 id: conn.last_insert_rowid(),
                 source: source.to_string(),
@@ -263,16 +280,13 @@ fn import_gpx_from_dir(source: &str, dir: &Path) -> Result<Vec<Activity>, String
                 duration_sec: meta.duration_sec,
                 gpx_file: new_path.to_string_lossy().to_string(),
             });
-        } else {
-            eprintln!("[DEBUG] insert conflict, skipped");
         }
     }
-    eprintln!("[DEBUG] total gpx files={}, imported={}", count, imported.len());
 
     Ok(imported)
 }
 
-// ── Tauri commands ────────────────────────────────────────────
+// ── Sync commands ─────────────────────────────────────────────
 
 #[tauri::command]
 fn sync_codoon(
@@ -286,11 +300,7 @@ fn sync_codoon(
         return Err("codoon_sync.py not found".into());
     }
 
-    let python = if cfg!(target_os = "windows") {
-        "python"
-    } else {
-        "python3"
-    };
+    let python = if cfg!(target_os = "windows") { "python" } else { "python3" };
 
     let mut cmd = Command::new(python);
     cmd.arg(&script).current_dir(current_dir.join("running_page"));
@@ -328,11 +338,7 @@ fn sync_joyrun(
         return Err("joyrun_sync.py not found".into());
     }
 
-    let python = if cfg!(target_os = "windows") {
-        "python"
-    } else {
-        "python3"
-    };
+    let python = if cfg!(target_os = "windows") { "python" } else { "python3" };
 
     let mut cmd = Command::new(python);
     cmd.arg(&script).current_dir(current_dir.join("running_page"));
@@ -358,20 +364,16 @@ fn sync_joyrun(
     Ok(format!("{}\n{}\nImported {} new activities.", stdout, stderr, imported.len()))
 }
 
-// ── Scan GPX dirs (GPX_OUT + data/gpx) ────────────────────────
-
 #[tauri::command]
 fn scan_gpx_dirs() -> Result<String, String> {
     let current_dir = project_root()?;
     let mut total = 0usize;
 
-    // scan running_page/GPX_OUT
     let gpx_out = current_dir.join("running_page/GPX_OUT");
     if gpx_out.exists() {
         total += import_gpx_from_dir("local", &gpx_out)?.len();
     }
 
-    // scan data/gpx (in case files were copied there manually)
     let data_gpx = current_dir.join("data/gpx");
     if data_gpx.exists() {
         total += import_gpx_from_dir("local", &data_gpx)?.len();
@@ -383,8 +385,6 @@ fn scan_gpx_dirs() -> Result<String, String> {
         "No new GPX files found.".to_string()
     })
 }
-
-// ── Import local GPX files by path ────────────────────────────
 
 #[tauri::command]
 fn import_local_gpx(paths: Vec<String>) -> Result<String, String> {
@@ -479,7 +479,6 @@ fn get_activities(filter: ActivityFilter) -> Result<Vec<Activity>, String> {
     let mut activities = Vec::new();
     for row in rows {
         let a = row.map_err(|e| e.to_string())?;
-        // apply filters in Rust (dataset is small)
         if let Some(ref src) = filter.source {
             if a.source != *src {
                 continue;
@@ -528,6 +527,343 @@ fn delete_activities(ids: Vec<i64>) -> Result<String, String> {
     Ok(format!("Deleted {} activities.", ids.len()))
 }
 
+// ── Strava OAuth ──────────────────────────────────────────────
+
+#[tauri::command]
+fn save_strava_config(client_id: String, client_secret: String) -> Result<String, String> {
+    let conn = db_conn()?;
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "INSERT INTO platforms (platform, client_id, client_secret, created_at, updated_at)
+         VALUES ('strava', ?1, ?2, ?3, ?4)
+         ON CONFLICT(platform) DO UPDATE SET
+            client_id = excluded.client_id,
+            client_secret = excluded.client_secret,
+            updated_at = excluded.updated_at",
+        rusqlite::params![client_id, client_secret, now, now],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok("Strava config saved.".to_string())
+}
+
+#[tauri::command]
+fn get_strava_config() -> Result<StravaConfig, String> {
+    let conn = db_conn()?;
+    let row = conn.query_row(
+        "SELECT client_id, client_secret, refresh_token, access_token, expires_at, athlete_id
+         FROM platforms WHERE platform = 'strava' LIMIT 1",
+        [],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<i64>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+            ))
+        },
+    );
+
+    match row {
+        Ok((client_id, client_secret, refresh_token, access_token, expires_at, athlete_id)) => {
+            let authorized = refresh_token.is_some();
+            Ok(StravaConfig {
+                client_id,
+                client_secret,
+                refresh_token,
+                access_token,
+                expires_at,
+                athlete_id,
+                authorized,
+            })
+        }
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(StravaConfig {
+            client_id: String::new(),
+            client_secret: String::new(),
+            refresh_token: None,
+            access_token: None,
+            expires_at: None,
+            athlete_id: None,
+            authorized: false,
+        }),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+fn open_browser(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(url)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", url])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+async fn start_oauth_server(port: u16) -> Result<String, String> {
+    let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let (mut socket, _) = listener
+        .accept()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut buf = [0u8; 4096];
+    let n = socket
+        .read(&mut buf)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let request = String::from_utf8_lossy(&buf[..n]);
+    let first_line = request.lines().next().ok_or("Empty request")?;
+    let path = first_line.split_whitespace().nth(1).ok_or("Invalid request")?;
+
+    let base = url::Url::parse("http://localhost").unwrap();
+    let url = base.join(path).map_err(|e| e.to_string())?;
+    let mut code = None;
+    for (key, value) in url.query_pairs() {
+        if key == "code" {
+            code = Some(value.to_string());
+            break;
+        }
+    }
+
+    let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<h1>Authorization successful! You can close this window.</h1>";
+    socket
+        .write_all(response.as_bytes())
+        .await
+        .map_err(|e| e.to_string())?;
+
+    code.ok_or("No code found in callback".to_string())
+}
+
+#[tauri::command]
+async fn authorize_strava() -> Result<String, String> {
+    let config = get_strava_config()?;
+    if config.client_id.is_empty() || config.client_secret.is_empty() {
+        return Err("Please set Strava client_id and client_secret first.".to_string());
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|e| e.to_string())?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| e.to_string())?
+        .port();
+    drop(listener);
+
+    let redirect_uri = format!("http://localhost:{}", port);
+    let auth_url = format!(
+        "https://www.strava.com/oauth/authorize?client_id={}&redirect_uri={}&response_type=code&scope=activity:write,activity:read_all",
+        config.client_id,
+        redirect_uri
+    );
+
+    open_browser(&auth_url)?;
+
+    let code = start_oauth_server(port).await?;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("https://www.strava.com/oauth/token")
+        .form(&[
+            ("client_id", config.client_id.as_str()),
+            ("client_secret", config.client_secret.as_str()),
+            ("code", code.as_str()),
+            ("grant_type", "authorization_code"),
+        ])
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let data: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+
+    let refresh_token = data
+        .get("refresh_token")
+        .and_then(|v| v.as_str())
+        .ok_or("No refresh_token in response")?
+        .to_string();
+    let access_token = data
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .ok_or("No access_token in response")?
+        .to_string();
+    let expires_at = data.get("expires_at").and_then(|v| v.as_i64());
+    let athlete_id = data
+        .get("athlete")
+        .and_then(|a| a.get("id"))
+        .and_then(|v| v.as_i64())
+        .map(|id| id.to_string());
+
+    let conn = db_conn()?;
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE platforms SET refresh_token = ?1, access_token = ?2, expires_at = ?3, athlete_id = ?4, updated_at = ?5
+         WHERE platform = 'strava'",
+        rusqlite::params![refresh_token, access_token, expires_at, athlete_id, now],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok("Strava authorized successfully.".to_string())
+}
+
+async fn refresh_strava_token(config: &StravaConfig) -> Result<String, String> {
+    let refresh_token = config
+        .refresh_token
+        .as_ref()
+        .ok_or("No refresh token available")?;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("https://www.strava.com/oauth/token")
+        .form(&[
+            ("client_id", config.client_id.as_str()),
+            ("client_secret", config.client_secret.as_str()),
+            ("refresh_token", refresh_token.as_str()),
+            ("grant_type", "refresh_token"),
+        ])
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let data: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+
+    let new_access_token = data
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .ok_or("No access_token in refresh response")?
+        .to_string();
+    let new_refresh_token = data
+        .get("refresh_token")
+        .and_then(|v| v.as_str())
+        .unwrap_or(refresh_token)
+        .to_string();
+    let expires_at = data.get("expires_at").and_then(|v| v.as_i64());
+
+    let conn = db_conn()?;
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE platforms SET access_token = ?1, refresh_token = ?2, expires_at = ?3, updated_at = ?4
+         WHERE platform = 'strava'",
+        rusqlite::params![new_access_token, new_refresh_token, expires_at, now],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(new_access_token)
+}
+
+async fn get_valid_access_token() -> Result<String, String> {
+    let config = get_strava_config()?;
+    if !config.authorized {
+        return Err("Strava not authorized. Please authorize first.".to_string());
+    }
+
+    let now = chrono::Utc::now().timestamp();
+    if let Some(expires_at) = config.expires_at {
+        if now >= expires_at - 300 {
+            return refresh_strava_token(&config).await;
+        }
+    }
+
+    config
+        .access_token
+        .ok_or_else(|| "No access token available".to_string())
+}
+
+#[tauri::command]
+async fn upload_to_strava(ids: Vec<i64>) -> Result<Vec<String>, String> {
+    let access_token = get_valid_access_token().await?;
+    let conn = db_conn()?;
+    let client = reqwest::Client::new();
+    let mut results = Vec::new();
+
+    for id in ids {
+        let activity: Activity = conn.query_row(
+            "SELECT id, source, external_id, name, sport_type, start_time,
+                    distance_m, elevation_gain_m, duration_sec, gpx_file
+             FROM activities WHERE id = ?1 AND is_deleted = 0 LIMIT 1",
+            rusqlite::params![id],
+            |row| {
+                Ok(Activity {
+                    id: row.get(0)?,
+                    source: row.get(1)?,
+                    external_id: row.get(2)?,
+                    name: row.get(3)?,
+                    sport_type: row.get(4)?,
+                    start_time: row.get(5)?,
+                    distance_m: row.get(6)?,
+                    elevation_gain_m: row.get(7)?,
+                    duration_sec: row.get(8)?,
+                    gpx_file: row.get(9)?,
+                })
+            },
+        ).map_err(|e| e.to_string())?;
+
+        let gpx_path = project_root()?.join(&activity.gpx_file);
+        let file_content = std::fs::read(&gpx_path)
+            .map_err(|e| format!("Read GPX failed: {}", e))?;
+        let file_name = Path::new(&activity.gpx_file)
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+
+        let sport_type = activity.sport_type.unwrap_or_else(|| "Run".to_string());
+        let name = activity.name.unwrap_or_else(|| "Activity".to_string());
+
+        let form = reqwest::multipart::Form::new()
+            .part(
+                "file",
+                reqwest::multipart::Part::bytes(file_content).file_name(file_name),
+            )
+            .text("data_type", "gpx")
+            .text("name", name)
+            .text("sport_type", sport_type);
+
+        let resp = client
+            .post("https://www.strava.com/api/v3/uploads")
+            .bearer_auth(&access_token)
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|e| format!("Upload request failed: {}", e))?;
+
+        let status = resp.status();
+        let body: serde_json::Value = resp.json().await
+            .map_err(|e| format!("Parse upload response failed: {}", e))?;
+
+        if !status.is_success() {
+            let msg = body.get("message").and_then(|m| m.as_str()).unwrap_or("Unknown error");
+            results.push(format!("ID {} failed: {}", id, msg));
+            continue;
+        }
+
+        let upload_id = body.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+        results.push(format!("ID {} uploaded (upload_id: {})", id, upload_id));
+    }
+
+    Ok(results)
+}
+
 // ── App entry ─────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -541,6 +877,10 @@ pub fn run() {
             import_local_gpx,
             get_activities,
             delete_activities,
+            save_strava_config,
+            get_strava_config,
+            authorize_strava,
+            upload_to_strava,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

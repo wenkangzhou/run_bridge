@@ -15,7 +15,17 @@ type Activity = {
   gpx_file: string;
 };
 
-type View = "sync" | "activities";
+type StravaConfig = {
+  client_id: string;
+  client_secret: string;
+  refresh_token: string | null;
+  access_token: string | null;
+  expires_at: number | null;
+  athlete_id: string | null;
+  authorized: boolean;
+};
+
+type View = "sync" | "activities" | "platforms";
 
 function fmtDist(m: number | null): string {
   if (m == null) return "-";
@@ -44,12 +54,10 @@ function SyncPage() {
   const [log, setLog] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // codoon
   const [cdMobile, setCdMobile] = useState("");
   const [cdPassword, setCdPassword] = useState("");
   const [cdUseToken, setCdUseToken] = useState(false);
 
-  // joyrun
   const [jrPhone, setJrPhone] = useState("");
   const [jrCode, setJrCode] = useState("");
   const [jrUseSid, setJrUseSid] = useState(false);
@@ -81,16 +89,10 @@ function SyncPage() {
   return (
     <div className="sync-page">
       <div className="platform-tabs">
-        <button
-          className={platform === "codoon" ? "active" : ""}
-          onClick={() => setPlatform("codoon")}
-        >
+        <button className={platform === "codoon" ? "active" : ""} onClick={() => setPlatform("codoon")}>
           咕咚 (Codoon)
         </button>
-        <button
-          className={platform === "joyrun" ? "active" : ""}
-          onClick={() => setPlatform("joyrun")}
-        >
+        <button className={platform === "joyrun" ? "active" : ""} onClick={() => setPlatform("joyrun")}>
           悦跑圈 (Joyrun)
         </button>
       </div>
@@ -99,29 +101,15 @@ function SyncPage() {
         <>
           <div className="form-group">
             <label>手机号 / Refresh Token</label>
-            <input
-              type="text"
-              value={cdMobile}
-              onChange={(e) => setCdMobile(e.currentTarget.value)}
-              placeholder={cdUseToken ? "refresh_token" : "mobile number"}
-            />
+            <input type="text" value={cdMobile} onChange={(e) => setCdMobile(e.currentTarget.value)} placeholder={cdUseToken ? "refresh_token" : "mobile number"} />
           </div>
           <div className="form-group">
             <label>密码 / User ID</label>
-            <input
-              type="password"
-              value={cdPassword}
-              onChange={(e) => setCdPassword(e.currentTarget.value)}
-              placeholder={cdUseToken ? "user_id" : "password"}
-            />
+            <input type="password" value={cdPassword} onChange={(e) => setCdPassword(e.currentTarget.value)} placeholder={cdUseToken ? "user_id" : "password"} />
           </div>
           <div className="form-group checkbox">
             <label>
-              <input
-                type="checkbox"
-                checked={cdUseToken}
-                onChange={(e) => setCdUseToken(e.currentTarget.checked)}
-              />
+              <input type="checkbox" checked={cdUseToken} onChange={(e) => setCdUseToken(e.currentTarget.checked)} />
               使用 Refresh Token 登录
             </label>
           </div>
@@ -132,29 +120,15 @@ function SyncPage() {
         <>
           <div className="form-group">
             <label>手机号 / UID</label>
-            <input
-              type="text"
-              value={jrPhone}
-              onChange={(e) => setJrPhone(e.currentTarget.value)}
-              placeholder={jrUseSid ? "uid" : "phone number"}
-            />
+            <input type="text" value={jrPhone} onChange={(e) => setJrPhone(e.currentTarget.value)} placeholder={jrUseSid ? "uid" : "phone number"} />
           </div>
           <div className="form-group">
             <label>验证码 / SID</label>
-            <input
-              type="text"
-              value={jrCode}
-              onChange={(e) => setJrCode(e.currentTarget.value)}
-              placeholder={jrUseSid ? "sid" : "SMS code"}
-            />
+            <input type="text" value={jrCode} onChange={(e) => setJrCode(e.currentTarget.value)} placeholder={jrUseSid ? "sid" : "SMS code"} />
           </div>
           <div className="form-group checkbox">
             <label>
-              <input
-                type="checkbox"
-                checked={jrUseSid}
-                onChange={(e) => setJrUseSid(e.currentTarget.checked)}
-              />
+              <input type="checkbox" checked={jrUseSid} onChange={(e) => setJrUseSid(e.currentTarget.checked)} />
               使用 UID + SID 登录
             </label>
           </div>
@@ -164,12 +138,114 @@ function SyncPage() {
       <button onClick={handleSync} disabled={loading} className="sync-btn">
         {loading ? "Syncing..." : "Start Sync"}
       </button>
+      {log && <div className="log-box"><pre>{log}</pre></div>}
+    </div>
+  );
+}
 
-      {log && (
-        <div className="log-box">
-          <pre>{log}</pre>
+// ── Platforms Page ────────────────────────────────────────────
+
+function PlatformsPage() {
+  const [config, setConfig] = useState<StravaConfig>({
+    client_id: "",
+    client_secret: "",
+    refresh_token: null,
+    access_token: null,
+    expires_at: null,
+    athlete_id: null,
+    authorized: false,
+  });
+  const [saving, setSaving] = useState(false);
+  const [authorizing, setAuthorizing] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  async function loadConfig() {
+    try {
+      const c = await invoke<StravaConfig>("get_strava_config");
+      setConfig(c);
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  useEffect(() => {
+    loadConfig();
+  }, []);
+
+  async function handleSave() {
+    setSaving(true);
+    setMsg("");
+    try {
+      await invoke("save_strava_config", {
+        client_id: config.client_id,
+        client_secret: config.client_secret,
+      });
+      setMsg("Config saved.");
+      await loadConfig();
+    } catch (err) {
+      setMsg(String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleAuthorize() {
+    setAuthorizing(true);
+    setMsg("Opening browser for Strava authorization...");
+    try {
+      const result = await invoke<string>("authorize_strava");
+      setMsg(result);
+      await loadConfig();
+    } catch (err) {
+      setMsg(String(err));
+    } finally {
+      setAuthorizing(false);
+    }
+  }
+
+  return (
+    <div className="platforms-page">
+      <h2>Platforms</h2>
+      <div className="platform-card">
+        <div className="platform-header">
+          <span className="platform-name">Strava</span>
+          <span className={`platform-status ${config.authorized ? "ok" : "warn"}`}>
+            {config.authorized ? "已授权" : "未授权"}
+          </span>
         </div>
-      )}
+
+        {config.athlete_id && (
+          <p className="platform-detail">Athlete ID: {config.athlete_id}</p>
+        )}
+
+        <div className="form-group">
+          <label>Client ID</label>
+          <input
+            type="text"
+            value={config.client_id}
+            onChange={(e) => setConfig({ ...config, client_id: e.currentTarget.value })}
+          />
+        </div>
+        <div className="form-group">
+          <label>Client Secret</label>
+          <input
+            type="password"
+            value={config.client_secret}
+            onChange={(e) => setConfig({ ...config, client_secret: e.currentTarget.value })}
+          />
+        </div>
+
+        <div className="platform-actions">
+          <button onClick={handleSave} disabled={saving}>
+            {saving ? "Saving..." : "Save Config"}
+          </button>
+          <button onClick={handleAuthorize} disabled={authorizing || !config.client_id || !config.client_secret}>
+            {authorizing ? "Authorizing..." : "Authorize"}
+          </button>
+        </div>
+
+        {msg && <p className="platform-msg">{msg}</p>}
+      </div>
     </div>
   );
 }
@@ -180,27 +256,23 @@ function ActivitiesPage() {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(false);
+  const [scanMsg, setScanMsg] = useState("");
+  const [uploading, setUploading] = useState(false);
 
-  // filters
   const [sourceFilter, setSourceFilter] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [distMin, setDistMin] = useState("");
   const [distMax, setDistMax] = useState("");
 
-  const [scanMsg, setScanMsg] = useState("");
-
   async function load() {
     setLoading(true);
     setScanMsg("");
     try {
-      // 1. scan GPX dirs first
       const scanResult = await invoke<string>("scan_gpx_dirs");
       if (!scanResult.includes("No new GPX")) {
         setScanMsg(scanResult);
       }
-
-      // 2. query activities
       const result = await invoke<Activity[]>("get_activities", {
         filter: {
           source: sourceFilter || null,
@@ -235,6 +307,25 @@ function ActivitiesPage() {
     }
   }
 
+  async function handleUpload() {
+    if (selected.size === 0) return;
+    setUploading(true);
+    try {
+      const config = await invoke<StravaConfig>("get_strava_config");
+      if (!config.authorized) {
+        alert("Strava not authorized. Please go to Platforms page to authorize first.");
+        setUploading(false);
+        return;
+      }
+      const results = await invoke<string[]>("upload_to_strava", { ids: Array.from(selected) });
+      alert(results.join("\n"));
+    } catch (err) {
+      alert(String(err));
+    } finally {
+      setUploading(false);
+    }
+  }
+
   function toggleOne(id: number) {
     const next = new Set(selected);
     if (next.has(id)) next.delete(id);
@@ -253,55 +344,30 @@ function ActivitiesPage() {
   return (
     <div className="activities-page">
       <div className="filter-bar">
-        <select
-          value={sourceFilter}
-          onChange={(e) => setSourceFilter(e.target.value)}
-        >
+        <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}>
           <option value="">All Sources</option>
           <option value="codoon">咕咚</option>
           <option value="joyrun">悦跑圈</option>
           <option value="local">本地</option>
         </select>
-        <input
-          type="date"
-          value={dateFrom}
-          onChange={(e) => setDateFrom(e.target.value)}
-        />
-        <input
-          type="date"
-          value={dateTo}
-          onChange={(e) => setDateTo(e.target.value)}
-        />
-        <input
-          type="number"
-          value={distMin}
-          onChange={(e) => setDistMin(e.target.value)}
-          placeholder="Min km"
-        />
-        <input
-          type="number"
-          value={distMax}
-          onChange={(e) => setDistMax(e.target.value)}
-          placeholder="Max km"
-        />
+        <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+        <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+        <input type="number" value={distMin} onChange={(e) => setDistMin(e.target.value)} placeholder="Min km" />
+        <input type="number" value={distMax} onChange={(e) => setDistMax(e.target.value)} placeholder="Max km" />
         <button onClick={load}>Filter</button>
       </div>
 
       <div className="batch-bar">
         <label className="checkbox">
-          <input
-            type="checkbox"
-            checked={
-              activities.length > 0 && selected.size === activities.length
-            }
-            onChange={toggleAll}
-          />
+          <input type="checkbox" checked={activities.length > 0 && selected.size === activities.length} onChange={toggleAll} />
           Select All
         </label>
         <button onClick={handleDelete} disabled={selected.size === 0}>
           Delete ({selected.size})
         </button>
-        <button disabled title="Coming soon">Upload</button>
+        <button onClick={handleUpload} disabled={selected.size === 0 || uploading}>
+          {uploading ? "Uploading..." : "Upload"}
+        </button>
       </div>
 
       <ImportLocalGpx onImport={load} />
@@ -310,23 +376,15 @@ function ActivitiesPage() {
       {loading && <p className="loading">Loading...</p>}
 
       <div className="activity-list">
-        {activities.length === 0 && !loading && (
-          <p className="empty">No activities found.</p>
-        )}
+        {activities.length === 0 && !loading && <p className="empty">No activities found.</p>}
         {activities.map((a) => (
           <div key={a.id} className="activity-row">
-            <input
-              type="checkbox"
-              checked={selected.has(a.id)}
-              onChange={() => toggleOne(a.id)}
-            />
+            <input type="checkbox" checked={selected.has(a.id)} onChange={() => toggleOne(a.id)} />
             <span className={`source-badge ${a.source}`}>{a.source}</span>
             <span className="sport">{a.sport_type || "Unknown"}</span>
             <span className="date">{fmtDate(a.start_time)}</span>
             <span className="distance">{fmtDist(a.distance_m)}</span>
-            <span className="elevation">
-              +{a.elevation_gain_m?.toFixed(0) ?? "-"}m
-            </span>
+            <span className="elevation">+{a.elevation_gain_m?.toFixed(0) ?? "-"}m</span>
             <span className="duration">{fmtDur(a.duration_sec)}</span>
           </div>
         ))}
@@ -343,12 +401,8 @@ function ImportLocalGpx({ onImport }: { onImport: () => void }) {
   const [msg, setMsg] = useState("");
 
   async function handleImport() {
-    const list = paths
-      .split("\n")
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
+    const list = paths.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
     if (list.length === 0) return;
-
     setImporting(true);
     setMsg("Importing...");
     try {
@@ -367,15 +421,8 @@ function ImportLocalGpx({ onImport }: { onImport: () => void }) {
     <div className="import-box">
       <details>
         <summary>Import Local GPX</summary>
-        <textarea
-          rows={3}
-          placeholder="Paste GPX file paths, one per line..."
-          value={paths}
-          onChange={(e) => setPaths(e.currentTarget.value)}
-        />
-        <button onClick={handleImport} disabled={importing}>
-          {importing ? "Importing..." : "Import"}
-        </button>
+        <textarea rows={3} placeholder="Paste GPX file paths, one per line..." value={paths} onChange={(e) => setPaths(e.currentTarget.value)} />
+        <button onClick={handleImport} disabled={importing}>{importing ? "Importing..." : "Import"}</button>
         {msg && <span className="import-msg">{msg}</span>}
       </details>
     </div>
@@ -391,20 +438,11 @@ function App() {
     <main className="container">
       <h1>RunBridge</h1>
       <nav className="nav-tabs">
-        <button
-          className={view === "sync" ? "active" : ""}
-          onClick={() => setView("sync")}
-        >
-          Sync
-        </button>
-        <button
-          className={view === "activities" ? "active" : ""}
-          onClick={() => setView("activities")}
-        >
-          Activities
-        </button>
+        <button className={view === "sync" ? "active" : ""} onClick={() => setView("sync")}>Sync</button>
+        <button className={view === "activities" ? "active" : ""} onClick={() => setView("activities")}>Activities</button>
+        <button className={view === "platforms" ? "active" : ""} onClick={() => setView("platforms")}>Platforms</button>
       </nav>
-      {view === "sync" ? <SyncPage /> : <ActivitiesPage />}
+      {view === "sync" ? <SyncPage /> : view === "activities" ? <ActivitiesPage /> : <PlatformsPage />}
     </main>
   );
 }
