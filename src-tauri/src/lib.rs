@@ -162,23 +162,27 @@ fn parse_gpx_file(path: &Path) -> Result<ActivityMeta, String> {
 // ── Import GPX from running_page output ───────────────────────
 
 fn import_gpx_from_dir(source: &str, dir: &Path) -> Result<Vec<Activity>, String> {
+    eprintln!("[DEBUG] import_gpx_from_dir: source={}, dir={}", source, dir.display());
     let conn = db_conn()?;
     let mut imported = Vec::new();
 
     let entries = std::fs::read_dir(dir).map_err(|e| e.to_string())?;
+    let mut count = 0;
     for entry in entries {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
         if path.extension() != Some(std::ffi::OsStr::new("gpx")) {
             continue;
         }
+        count += 1;
 
         let stem = path
             .file_stem()
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
-        let external_id = stem;
+        let external_id = stem.clone();
+        eprintln!("[DEBUG] found gpx: {} external_id={}", path.display(), external_id);
 
         // skip if already imported
         let exists: bool = conn
@@ -189,11 +193,19 @@ fn import_gpx_from_dir(source: &str, dir: &Path) -> Result<Vec<Activity>, String
             )
             .unwrap_or(false);
         if exists {
+            eprintln!("[DEBUG] already exists, skip");
             continue;
         }
 
         // parse GPX
-        let meta = parse_gpx_file(&path)?;
+        let meta = match parse_gpx_file(&path) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("[DEBUG] parse_gpx_file failed for {}: {}", path.display(), e);
+                continue;
+            }
+        };
+        eprintln!("[DEBUG] parsed: dist={:?} elev={:?} time={:?}", meta.distance_m, meta.elevation_gain_m, meta.start_time);
 
         // copy into data/gpx/
         let new_name = format!("{}_{}.gpx", source, external_id);
@@ -222,10 +234,11 @@ fn import_gpx_from_dir(source: &str, dir: &Path) -> Result<Vec<Activity>, String
         .map_err(|e| e.to_string())?;
 
         if conn.last_insert_rowid() != 0 {
+            eprintln!("[DEBUG] inserted id={}", conn.last_insert_rowid());
             imported.push(Activity {
                 id: conn.last_insert_rowid(),
                 source: source.to_string(),
-                external_id,
+                external_id: stem,
                 name: meta.name,
                 sport_type: meta.sport_type,
                 start_time: meta.start_time,
@@ -234,8 +247,11 @@ fn import_gpx_from_dir(source: &str, dir: &Path) -> Result<Vec<Activity>, String
                 duration_sec: meta.duration_sec,
                 gpx_file: new_path.to_string_lossy().to_string(),
             });
+        } else {
+            eprintln!("[DEBUG] insert conflict, skipped");
         }
     }
+    eprintln!("[DEBUG] total gpx files={}, imported={}", count, imported.len());
 
     Ok(imported)
 }
