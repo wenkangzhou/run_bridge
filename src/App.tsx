@@ -188,9 +188,19 @@ function ActivitiesPage() {
   const [distMin, setDistMin] = useState("");
   const [distMax, setDistMax] = useState("");
 
+  const [scanMsg, setScanMsg] = useState("");
+
   async function load() {
     setLoading(true);
+    setScanMsg("");
     try {
+      // 1. scan GPX dirs first
+      const scanResult = await invoke<string>("scan_gpx_dirs");
+      if (!scanResult.includes("No new GPX")) {
+        setScanMsg(scanResult);
+      }
+
+      // 2. query activities
       const result = await invoke<Activity[]>("get_activities", {
         filter: {
           source: sourceFilter || null,
@@ -204,6 +214,7 @@ function ActivitiesPage() {
       setSelected(new Set());
     } catch (err) {
       console.error(err);
+      setScanMsg(String(err));
     } finally {
       setLoading(false);
     }
@@ -295,6 +306,7 @@ function ActivitiesPage() {
 
       <ImportLocalGpx onImport={load} />
 
+      {scanMsg && <p className="scan-msg">{scanMsg}</p>}
       {loading && <p className="loading">Loading...</p>}
 
       <div className="activity-list">

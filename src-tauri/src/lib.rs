@@ -418,17 +418,6 @@ fn import_local_gpx(paths: Vec<String>) -> Result<String, String> {
 
 #[tauri::command]
 fn get_activities(filter: ActivityFilter) -> Result<Vec<Activity>, String> {
-    // auto-scan GPX dirs before querying
-    let current_dir = std::env::current_dir().map_err(|e| e.to_string())?;
-    let gpx_out = current_dir.join("running_page/GPX_OUT");
-    if gpx_out.exists() {
-        let _ = import_gpx_from_dir("local", &gpx_out);
-    }
-    let data_gpx = current_dir.join("data/gpx");
-    if data_gpx.exists() {
-        let _ = import_gpx_from_dir("local", &data_gpx);
-    }
-
     let conn = db_conn()?;
     let mut stmt = conn
         .prepare(

@@ -356,6 +356,16 @@ h2 {
   padding: 20px;
 }
 
+.scan-msg {
+  padding: 8px 12px;
+  background: var(--surface-hover);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 4px 4px 0;
+  font-size: 13px;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
 /* Import local GPX */
 .import-box {
   margin-bottom: 12px;
