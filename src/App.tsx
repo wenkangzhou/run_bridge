@@ -249,6 +249,7 @@ function ActivitiesPage() {
           <option value="">All Sources</option>
           <option value="codoon">咕咚</option>
           <option value="joyrun">悦跑圈</option>
+          <option value="local">本地</option>
         </select>
         <input
           type="date"
@@ -292,6 +293,8 @@ function ActivitiesPage() {
         <button disabled title="Coming soon">Upload</button>
       </div>
 
+      <ImportLocalGpx onImport={load} />
+
       {loading && <p className="loading">Loading...</p>}
 
       <div className="activity-list">
@@ -316,6 +319,53 @@ function ActivitiesPage() {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ── Import Local GPX ──────────────────────────────────────────
+
+function ImportLocalGpx({ onImport }: { onImport: () => void }) {
+  const [paths, setPaths] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  async function handleImport() {
+    const list = paths
+      .split("\n")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (list.length === 0) return;
+
+    setImporting(true);
+    setMsg("Importing...");
+    try {
+      const result = await invoke<string>("import_local_gpx", { paths: list });
+      setMsg(result);
+      setPaths("");
+      onImport();
+    } catch (err) {
+      setMsg(String(err));
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  return (
+    <div className="import-box">
+      <details>
+        <summary>Import Local GPX</summary>
+        <textarea
+          rows={3}
+          placeholder="Paste GPX file paths, one per line..."
+          value={paths}
+          onChange={(e) => setPaths(e.currentTarget.value)}
+        />
+        <button onClick={handleImport} disabled={importing}>
+          {importing ? "Importing..." : "Import"}
+        </button>
+        {msg && <span className="import-msg">{msg}</span>}
+      </details>
     </div>
   );
 }

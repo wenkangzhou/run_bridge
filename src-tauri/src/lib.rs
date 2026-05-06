@@ -326,8 +326,109 @@ fn sync_joyrun(
     Ok(format!("{}\n{}\nImported {} new activities.", stdout, stderr, imported.len()))
 }
 
+// ── Scan GPX dirs (GPX_OUT + data/gpx) ────────────────────────
+
+#[tauri::command]
+fn scan_gpx_dirs() -> Result<String, String> {
+    let current_dir = std::env::current_dir().map_err(|e| e.to_string())?;
+    let mut total = 0usize;
+
+    // scan running_page/GPX_OUT
+    let gpx_out = current_dir.join("running_page/GPX_OUT");
+    if gpx_out.exists() {
+        total += import_gpx_from_dir("local", &gpx_out)?.len();
+    }
+
+    // scan data/gpx (in case files were copied there manually)
+    let data_gpx = current_dir.join("data/gpx");
+    if data_gpx.exists() {
+        total += import_gpx_from_dir("local", &data_gpx)?.len();
+    }
+
+    Ok(if total > 0 {
+        format!("Scanned and imported {} new local activities.", total)
+    } else {
+        "No new GPX files found.".to_string()
+    })
+}
+
+// ── Import local GPX files by path ────────────────────────────
+
+#[tauri::command]
+fn import_local_gpx(paths: Vec<String>) -> Result<String, String> {
+    let mut imported = 0usize;
+    for path_str in &paths {
+        let path = Path::new(path_str);
+        if !path.exists() || path.extension() != Some(std::ffi::OsStr::new("gpx")) {
+            continue;
+        }
+
+        let stem = path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let external_id = stem;
+
+        let conn = db_conn()?;
+        let exists: bool = conn
+            .query_row(
+                "SELECT 1 FROM activities WHERE external_id = ?1 AND is_deleted = 0 LIMIT 1",
+                rusqlite::params![external_id],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+        if exists {
+            continue;
+        }
+
+        let meta = parse_gpx_file(path)?;
+        let new_name = format!("local_{}.gpx", external_id);
+        let new_path = PathBuf::from(GPX_DIR).join(&new_name);
+        std::fs::copy(path, &new_path).map_err(|e| e.to_string())?;
+
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO activities
+             (source, external_id, name, sport_type, start_time, distance_m, elevation_gain_m, duration_sec, gpx_file, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             ON CONFLICT(source, external_id) DO NOTHING",
+            rusqlite::params![
+                "local",
+                external_id,
+                meta.name,
+                meta.sport_type,
+                meta.start_time,
+                meta.distance_m,
+                meta.elevation_gain_m,
+                meta.duration_sec,
+                new_path.to_string_lossy().to_string(),
+                now,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+
+        if conn.last_insert_rowid() != 0 {
+            imported += 1;
+        }
+    }
+
+    Ok(format!("Imported {} local GPX files.", imported))
+}
+
 #[tauri::command]
 fn get_activities(filter: ActivityFilter) -> Result<Vec<Activity>, String> {
+    // auto-scan GPX dirs before querying
+    let current_dir = std::env::current_dir().map_err(|e| e.to_string())?;
+    let gpx_out = current_dir.join("running_page/GPX_OUT");
+    if gpx_out.exists() {
+        let _ = import_gpx_from_dir("local", &gpx_out);
+    }
+    let data_gpx = current_dir.join("data/gpx");
+    if data_gpx.exists() {
+        let _ = import_gpx_from_dir("local", &data_gpx);
+    }
+
     let conn = db_conn()?;
     let mut stmt = conn
         .prepare(
@@ -415,6 +516,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             sync_codoon,
             sync_joyrun,
+            scan_gpx_dirs,
+            import_local_gpx,
             get_activities,
             delete_activities,
         ])
