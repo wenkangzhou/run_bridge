@@ -28,4 +28,5 @@ chrono = "0.4"
 tokio = { version = "1", features = ["process", "rt-multi-thread", "net", "io-util"] }
 reqwest = { version = "0.12", features = ["json", "multipart"] }
 url = "2"
+tauri-plugin-dialog = "2.7.1"
 

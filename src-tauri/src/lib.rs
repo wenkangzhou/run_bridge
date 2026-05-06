@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
+use std::sync::OnceLock;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
@@ -8,6 +9,28 @@ const DB_PATH: &str = "data/runbridge.db";
 const GPX_DIR: &str = "data/gpx";
 
 // ── Project root detection ────────────────────────────────────
+
+static SYNC_PID: OnceLock<Arc<Mutex<Option<u32>>>> = OnceLock::new();
+
+fn sync_pid() -> &'static Arc<Mutex<Option<u32>>> {
+    SYNC_PID.get_or_init(|| Arc::new(Mutex::new(None)))
+}
+
+#[tauri::command]
+fn cancel_sync() -> Result<String, String> {
+    if let Ok(guard) = sync_pid().lock() {
+        if let Some(pid) = *guard {
+            #[cfg(target_os = "macos")]
+            { std::process::Command::new("kill").args(["-9", &pid.to_string()]).spawn().ok(); }
+            #[cfg(target_os = "linux")]
+            { std::process::Command::new("kill").args(["-9", &pid.to_string()]).spawn().ok(); }
+            #[cfg(target_os = "windows")]
+            { std::process::Command::new("taskkill").args(["/F", "/PID", &pid.to_string()]).spawn().ok(); }
+            return Ok("Sync cancelled.".to_string());
+        }
+    }
+    Ok("No sync in progress.".to_string())
+}
 
 fn project_root() -> Result<PathBuf, String> {
     let current = std::env::current_dir().map_err(|e| e.to_string())?;
@@ -42,6 +65,7 @@ pub struct Activity {
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct ActivityFilter {
     pub source: Option<String>,
     pub date_from: Option<String>,
@@ -149,6 +173,7 @@ fn parse_gpx_file(path: &Path) -> Result<ActivityMeta, String> {
     let file = std::fs::File::open(path).map_err(|e| format!("open gpx: {}", e))?;
     let gpx_data = gpx::read(file).map_err(|e| format!("parse gpx: {}", e))?;
 
+    let name = gpx_data.tracks.first().and_then(|t| t.name.clone());
     let sport_type = gpx_data.tracks.first().and_then(|t| t.type_.clone());
 
     let mut start_time: Option<String> = None;
@@ -208,7 +233,7 @@ fn parse_gpx_file(path: &Path) -> Result<ActivityMeta, String> {
     };
 
     Ok(ActivityMeta {
-        name: None,
+        name,
         sport_type,
         start_time,
         distance_m: if total_distance > 0.0 { Some(total_distance) } else { None },
@@ -238,20 +263,55 @@ fn import_gpx_from_dir(source: &str, dir: &Path, skip_any_source: bool) -> Resul
             .to_string();
         let external_id = stem.clone();
 
-        let exists = if skip_any_source {
-            conn.query_row(
-                "SELECT 1 FROM activities WHERE external_id = ?1 AND is_deleted = 0 LIMIT 1",
-                rusqlite::params![external_id],
-                |_| Ok(true),
-            ).unwrap_or(false)
-        } else {
-            conn.query_row(
-                "SELECT 1 FROM activities WHERE source = ?1 AND external_id = ?2 AND is_deleted = 0 LIMIT 1",
+        let exists_any: bool = conn.query_row(
+            "SELECT 1 FROM activities WHERE external_id = ?1 LIMIT 1",
+            rusqlite::params![external_id],
+            |_| Ok(true),
+        ).unwrap_or(false);
+
+        let exists_same_source: bool = conn.query_row(
+            "SELECT 1 FROM activities WHERE source = ?1 AND external_id = ?2 LIMIT 1",
+            rusqlite::params![source, external_id],
+            |_| Ok(true),
+        ).unwrap_or(false);
+
+        if exists_same_source {
+            continue;
+        }
+
+        // If exists as 'local', update source to the correct platform
+        if exists_any && !skip_any_source {
+            conn.execute(
+                "UPDATE activities SET source = ?1 WHERE external_id = ?2 AND source = 'local'",
                 rusqlite::params![source, external_id],
-                |_| Ok(true),
-            ).unwrap_or(false)
-        };
-        if exists {
+            ).map_err(|e| e.to_string())?;
+            // fetch the updated row to return
+            if let Ok(a) = conn.query_row(
+                "SELECT id, source, external_id, name, sport_type, start_time,
+                        distance_m, elevation_gain_m, duration_sec, gpx_file
+                 FROM activities WHERE source = ?1 AND external_id = ?2 AND is_deleted = 0 LIMIT 1",
+                rusqlite::params![source, external_id],
+                |row| {
+                    Ok(Activity {
+                        id: row.get(0)?,
+                        source: row.get(1)?,
+                        external_id: row.get(2)?,
+                        name: row.get(3)?,
+                        sport_type: row.get(4)?,
+                        start_time: row.get(5)?,
+                        distance_m: row.get(6)?,
+                        elevation_gain_m: row.get(7)?,
+                        duration_sec: row.get(8)?,
+                        gpx_file: row.get(9)?,
+                    })
+                },
+            ) {
+                imported.push(a);
+            }
+            continue;
+        }
+
+        if exists_any {
             continue;
         }
 
@@ -260,7 +320,28 @@ fn import_gpx_from_dir(source: &str, dir: &Path, skip_any_source: bool) -> Resul
             Err(_) => continue,
         };
 
-        let new_name = format!("{}_{}.gpx", source, external_id);
+        // Skip dirty data: zero distance and zero elevation
+        if meta.distance_m.unwrap_or(0.0) == 0.0 && meta.elevation_gain_m.unwrap_or(0.0) == 0.0 {
+            continue;
+        }
+
+        // Auto-detect source from GPX track name when importing as local
+        let detected_source = if source == "local" {
+            if let Ok(file) = std::fs::File::open(&path) {
+                if let Ok(gpx_data) = gpx::read(file) {
+                    let track_name = gpx_data.tracks.first().and_then(|t| t.name.clone()).unwrap_or_default();
+                    if track_name.to_lowercase().contains("codoon") {
+                        "codoon"
+                    } else if track_name.to_lowercase().contains("joyrun") {
+                        "joyrun"
+                    } else {
+                        source
+                    }
+                } else { source }
+            } else { source }
+        } else { source };
+
+        let new_name = format!("{}_{}.gpx", detected_source, external_id);
         let new_path = PathBuf::from(GPX_DIR).join(&new_name);
         std::fs::copy(&path, &new_path).map_err(|e| e.to_string())?;
 
@@ -271,7 +352,7 @@ fn import_gpx_from_dir(source: &str, dir: &Path, skip_any_source: bool) -> Resul
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(source, external_id) DO NOTHING",
             rusqlite::params![
-                source,
+                detected_source,
                 external_id,
                 meta.name,
                 meta.sport_type,
@@ -288,7 +369,7 @@ fn import_gpx_from_dir(source: &str, dir: &Path, skip_any_source: bool) -> Resul
         if conn.last_insert_rowid() != 0 {
             imported.push(Activity {
                 id: conn.last_insert_rowid(),
-                source: source.to_string(),
+                source: detected_source.to_string(),
                 external_id: stem,
                 name: meta.name,
                 sport_type: meta.sport_type,
@@ -321,7 +402,7 @@ async fn sync_codoon(
     let python = if cfg!(target_os = "windows") { "python" } else { "python3" };
     let work_dir = current_dir.join("running_page");
 
-    let result = tokio::task::spawn_blocking(move || {
+    let result: Result<std::process::Output, String> = tokio::task::spawn_blocking(move || {
         let mut cmd = std::process::Command::new(python);
         cmd.arg(&script).current_dir(&work_dir);
         if use_token {
@@ -330,10 +411,15 @@ async fn sync_codoon(
             cmd.arg(&mobile).arg(&password);
         }
         cmd.arg("--with-gpx");
-        cmd.output()
+        let child = cmd.spawn().map_err(|e| e.to_string())?;
+        let pid = child.id();
+        *sync_pid().lock().unwrap() = Some(pid);
+        let output = child.wait_with_output().map_err(|e| e.to_string())?;
+        *sync_pid().lock().unwrap() = None;
+        Ok(output)
     }).await.map_err(|e| e.to_string())?;
 
-    let output = result.map_err(|e| e.to_string())?;
+    let output = result?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
@@ -362,7 +448,7 @@ async fn sync_joyrun(
     let python = if cfg!(target_os = "windows") { "python" } else { "python3" };
     let work_dir = current_dir.join("running_page");
 
-    let result = tokio::task::spawn_blocking(move || {
+    let result: Result<std::process::Output, String> = tokio::task::spawn_blocking(move || {
         let mut cmd = std::process::Command::new(python);
         cmd.arg(&script).current_dir(&work_dir);
         if use_sid {
@@ -371,10 +457,15 @@ async fn sync_joyrun(
             cmd.arg(&phone).arg(&code);
         }
         cmd.arg("--with-gpx");
-        cmd.output()
+        let child = cmd.spawn().map_err(|e| e.to_string())?;
+        let pid = child.id();
+        *sync_pid().lock().unwrap() = Some(pid);
+        let output = child.wait_with_output().map_err(|e| e.to_string())?;
+        *sync_pid().lock().unwrap() = None;
+        Ok(output)
     }).await.map_err(|e| e.to_string())?;
 
-    let output = result.map_err(|e| e.to_string())?;
+    let output = result?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
@@ -429,7 +520,7 @@ fn import_local_gpx(paths: Vec<String>) -> Result<String, String> {
         let conn = db_conn()?;
         let exists: bool = conn
             .query_row(
-                "SELECT 1 FROM activities WHERE external_id = ?1 AND is_deleted = 0 LIMIT 1",
+                "SELECT 1 FROM activities WHERE external_id = ?1 LIMIT 1",
                 rusqlite::params![external_id],
                 |_| Ok(true),
             )
@@ -439,7 +530,27 @@ fn import_local_gpx(paths: Vec<String>) -> Result<String, String> {
         }
 
         let meta = parse_gpx_file(path)?;
-        let new_name = format!("local_{}.gpx", external_id);
+
+        // Skip dirty data: zero distance and zero elevation
+        if meta.distance_m.unwrap_or(0.0) == 0.0 && meta.elevation_gain_m.unwrap_or(0.0) == 0.0 {
+            continue;
+        }
+
+        // Auto-detect source from GPX track name
+        let detected_source = if let Ok(file) = std::fs::File::open(path) {
+            if let Ok(gpx_data) = gpx::read(file) {
+                let track_name = gpx_data.tracks.first().and_then(|t| t.name.clone()).unwrap_or_default();
+                if track_name.to_lowercase().contains("codoon") {
+                    "codoon"
+                } else if track_name.to_lowercase().contains("joyrun") {
+                    "joyrun"
+                } else {
+                    "local"
+                }
+            } else { "local" }
+        } else { "local" };
+
+        let new_name = format!("{}_{}.gpx", detected_source, external_id);
         let new_path = PathBuf::from(GPX_DIR).join(&new_name);
         std::fs::copy(path, &new_path).map_err(|e| e.to_string())?;
 
@@ -450,7 +561,7 @@ fn import_local_gpx(paths: Vec<String>) -> Result<String, String> {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(source, external_id) DO NOTHING",
             rusqlite::params![
-                "local",
+                detected_source,
                 external_id,
                 meta.name,
                 meta.sport_type,
@@ -709,6 +820,7 @@ fn save_account(
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct Account {
     pub platform: String,
     pub username: String,
@@ -909,8 +1021,8 @@ async fn upload_to_strava(ids: Vec<i64>) -> Result<Vec<String>, String> {
             },
         ).map_err(|e| e.to_string())?;
 
-        let gpx_path = project_root()?.join(&activity.gpx_file);
-        let file_content = std::fs::read(&gpx_path)
+        let gpx_path = Path::new(&activity.gpx_file);
+        let file_content = std::fs::read(gpx_path)
             .map_err(|e| format!("Read GPX failed: {}", e))?;
         let file_name = Path::new(&activity.gpx_file)
             .file_name()
@@ -919,16 +1031,21 @@ async fn upload_to_strava(ids: Vec<i64>) -> Result<Vec<String>, String> {
             .to_string();
 
         let sport_type = activity.sport_type.unwrap_or_else(|| "Run".to_string());
-        let name = activity.name.unwrap_or_else(|| "Activity".to_string());
 
-        let form = reqwest::multipart::Form::new()
+        let mut form = reqwest::multipart::Form::new()
             .part(
                 "file",
                 reqwest::multipart::Part::bytes(file_content).file_name(file_name),
             )
             .text("data_type", "gpx")
-            .text("name", name)
             .text("sport_type", sport_type);
+        // Let Strava auto-generate the title (Morning Run / Afternoon Run etc.)
+        // Only pass name if we have a meaningful custom one
+        if let Some(ref name) = activity.name {
+            if !name.is_empty() && !name.to_lowercase().contains("gpx from") {
+                form = form.text("name", name.clone());
+            }
+        }
 
         let resp = client
             .post("https://www.strava.com/api/v3/uploads")
@@ -955,25 +1072,108 @@ async fn upload_to_strava(ids: Vec<i64>) -> Result<Vec<String>, String> {
     Ok(results)
 }
 
+#[tauri::command]
+fn fix_local_sources() -> Result<String, String> {
+    let conn = db_conn()?;
+    let mut stmt = conn
+        .prepare("SELECT id, gpx_file FROM activities WHERE source = 'local' AND is_deleted = 0")
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map([], |row| {
+            let id: i64 = row.get(0)?;
+            let gpx_file: String = row.get(1)?;
+            Ok((id, gpx_file))
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut fixed = 0;
+    for row in rows {
+        let (id, gpx_file) = row.map_err(|e| e.to_string())?;
+        let new_source = if let Ok(file) = std::fs::File::open(&gpx_file) {
+            if let Ok(gpx_data) = gpx::read(file) {
+                let track_name = gpx_data.tracks.first().and_then(|t| t.name.clone()).unwrap_or_default();
+                if track_name.to_lowercase().contains("codoon") {
+                    Some("codoon")
+                } else if track_name.to_lowercase().contains("joyrun") {
+                    Some("joyrun")
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some(source) = new_source {
+            conn.execute(
+                "UPDATE activities SET source = ?1 WHERE id = ?2",
+                rusqlite::params![source, id],
+            )
+            .map_err(|e| e.to_string())?;
+            fixed += 1;
+        }
+    }
+
+    Ok(format!("Fixed {} local activities.", fixed))
+}
+
+#[tauri::command]
+fn export_gpx(ids: Vec<i64>, output_dir: String) -> Result<String, String> {
+    let conn = db_conn()?;
+    let export_dir = PathBuf::from(&output_dir);
+    std::fs::create_dir_all(&export_dir).map_err(|e| e.to_string())?;
+
+    let mut exported = 0usize;
+    for id in &ids {
+        let gpx_file: String = match conn.query_row(
+            "SELECT gpx_file FROM activities WHERE id = ?1 AND is_deleted = 0 LIMIT 1",
+            rusqlite::params![id],
+            |row| row.get(0),
+        ) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+
+        let src = Path::new(&gpx_file);
+        if !src.exists() {
+            continue;
+        }
+        let file_name = src.file_name().unwrap_or_default();
+        let dest = export_dir.join(file_name);
+        std::fs::copy(src, &dest).map_err(|e| e.to_string())?;
+        exported += 1;
+    }
+
+    Ok(format!("Exported {} GPX files to {}", exported, output_dir))
+}
+
 // ── App entry ─────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            export_gpx,
             sync_codoon,
             sync_joyrun,
+            cancel_sync,
             scan_gpx_dirs,
             import_local_gpx,
             get_activities,
             delete_activities,
+            fix_local_sources,
             save_strava_config,
             get_strava_config,
             authorize_strava,
             upload_to_strava,
             save_account,
             get_account,
+            export_gpx,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

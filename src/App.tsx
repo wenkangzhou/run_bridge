@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import "./App.css";
 
 type Activity = {
@@ -93,6 +94,17 @@ function SyncPage() {
   }
 
   async function handleSync() {
+    // save account immediately so credentials are remembered even if sync fails
+    try {
+      if (platform === "codoon") {
+        await invoke("save_account", { platform: "codoon", username: cdMobile, password: cdPassword, useToken: cdUseToken, useSid: false });
+      } else {
+        await invoke("save_account", { platform: "joyrun", username: jrPhone, password: jrCode, useToken: false, useSid: jrUseSid });
+      }
+    } catch (e) {
+      console.error("Failed to save account:", e);
+    }
+
     setLoading(true);
     setLog("Starting sync...\n");
     try {
@@ -109,12 +121,6 @@ function SyncPage() {
               useSid: jrUseSid,
             });
       setLog(String(result));
-      // save account after successful sync
-      if (platform === "codoon") {
-        await invoke("save_account", { platform: "codoon", username: cdMobile, password: cdPassword, useToken: cdUseToken, useSid: false });
-      } else {
-        await invoke("save_account", { platform: "joyrun", username: jrPhone, password: jrCode, useToken: false, useSid: jrUseSid });
-      }
     } catch (err) {
       setLog(String(err));
     } finally {
@@ -171,9 +177,16 @@ function SyncPage() {
         </>
       )}
 
-      <button onClick={handleSync} disabled={loading} className="sync-btn">
-        {loading ? "Syncing..." : "Start Sync"}
-      </button>
+      <div className="sync-actions">
+        <button onClick={handleSync} disabled={loading} className="sync-btn">
+          {loading ? "Syncing..." : "Start Sync"}
+        </button>
+        {loading && (
+          <button onClick={async () => { try { const r = await invoke("cancel_sync"); setLog(String(r)); setLoading(false); } catch (e) { setLog(String(e)); } }} className="cancel-btn">
+            Cancel
+          </button>
+        )}
+      </div>
       {log && <div className="log-box"><pre>{log}</pre></div>}
     </div>
   );
@@ -294,6 +307,8 @@ function ActivitiesPage() {
   const [loading, setLoading] = useState(false);
   const [scanMsg, setScanMsg] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [fixing, setFixing] = useState(false);
+  const [toast, setToast] = useState("");
 
   const [sourceFilter, setSourceFilter] = useState("");
   const [dateFrom, setDateFrom] = useState("");
@@ -334,17 +349,47 @@ function ActivitiesPage() {
 
   async function handleDelete() {
     if (selected.size === 0) return;
-    if (!confirm(`Delete ${selected.size} activities?`)) return;
     try {
-      await invoke("delete_activities", { ids: Array.from(selected) });
+      const result = await invoke<string>("delete_activities", { ids: Array.from(selected) });
+      setToast(result);
       load();
     } catch (err) {
-      alert(String(err));
+      setToast("Error: " + String(err));
+    }
+  }
+
+  async function handleFixSources() {
+    if (fixing) return;
+    setFixing(true);
+    try {
+      const result = await invoke<string>("fix_local_sources");
+      setToast(result);
+      await load();
+    } catch (err) {
+      setToast("Error: " + String(err));
+    } finally {
+      setFixing(false);
+    }
+  }
+
+  async function handleExport() {
+    if (selected.size === 0) return;
+    try {
+      const folder = await open({ directory: true });
+      if (!folder) return;
+      const result = await invoke<string>("export_gpx", { ids: Array.from(selected), outputDir: folder });
+      setToast(result);
+    } catch (err) {
+      setToast("Error: " + String(err));
     }
   }
 
   async function handleUpload() {
     if (selected.size === 0) return;
+    if (selected.size > 200) {
+      alert("Strava API limit: max 200 uploads per 15 minutes. Please select fewer activities.");
+      return;
+    }
     setUploading(true);
     try {
       const config = await invoke<StravaConfig>("get_strava_config");
@@ -386,8 +431,8 @@ function ActivitiesPage() {
           <option value="joyrun">悦跑圈</option>
           <option value="local">本地</option>
         </select>
-        <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-        <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+        <input type="date" autoComplete="off" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+        <input type="date" autoComplete="off" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
         <input type="number" value={distMin} onChange={(e) => setDistMin(e.target.value)} placeholder="Min km" />
         <input type="number" value={distMax} onChange={(e) => setDistMax(e.target.value)} placeholder="Max km" />
         <button onClick={load}>Filter</button>
@@ -401,6 +446,12 @@ function ActivitiesPage() {
         <button onClick={handleDelete} disabled={selected.size === 0}>
           Delete ({selected.size})
         </button>
+        <button onClick={handleFixSources} disabled={fixing}>
+          {fixing ? "Fixing..." : "Fix Sources"}
+        </button>
+        <button onClick={handleExport} disabled={selected.size === 0}>
+          Export GPX
+        </button>
         <button onClick={handleUpload} disabled={selected.size === 0 || uploading}>
           {uploading ? "Uploading..." : "Upload"}
         </button>
@@ -408,6 +459,11 @@ function ActivitiesPage() {
 
       <ImportLocalGpx onImport={load} />
 
+      {toast && (
+        <div className="toast" onClick={() => setToast("")}>
+          {toast}
+        </div>
+      )}
       {scanMsg && <p className="scan-msg">{scanMsg}</p>}
       {loading && <p className="loading">Loading...</p>}
 
