@@ -29,9 +29,12 @@ src-tauri/target
 # App runtime data
 data/
 
-# Python cache
+# Python cache & runtime data
 running_page/**/__pycache__/
 running_page/**/*.pyc
 running_page/**/.DS_Store
 running_page/**/data.db
 running_page/**/data.db-journal
+running_page/GPX_OUT/*.gpx
+running_page/TCX_OUT/*.tcx
+running_page/FIT_OUT/*.fit
