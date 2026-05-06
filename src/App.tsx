@@ -71,12 +71,12 @@ function SyncPage() {
           ? await invoke("sync_codoon", {
               mobile: cdMobile,
               password: cdPassword,
-              use_token: cdUseToken,
+              useToken: cdUseToken,
             })
           : await invoke("sync_joyrun", {
               phone: jrPhone,
               code: jrCode,
-              use_sid: jrUseSid,
+              useSid: jrUseSid,
             });
       setLog(String(result));
     } catch (err) {
@@ -177,8 +177,8 @@ function PlatformsPage() {
     setMsg("");
     try {
       await invoke("save_strava_config", {
-        client_id: config.client_id,
-        client_secret: config.client_secret,
+        clientId: config.client_id,
+        clientSecret: config.client_secret,
       });
       setMsg("Config saved.");
       await loadConfig();
@@ -276,10 +276,10 @@ function ActivitiesPage() {
       const result = await invoke<Activity[]>("get_activities", {
         filter: {
           source: sourceFilter || null,
-          date_from: dateFrom ? `${dateFrom}T00:00:00Z` : null,
-          date_to: dateTo ? `${dateTo}T23:59:59Z` : null,
-          distance_min: distMin ? parseFloat(distMin) * 1000 : null,
-          distance_max: distMax ? parseFloat(distMax) * 1000 : null,
+          dateFrom: dateFrom ? `${dateFrom}T00:00:00Z` : null,
+          dateTo: dateTo ? `${dateTo}T23:59:59Z` : null,
+          distanceMin: distMin ? parseFloat(distMin) * 1000 : null,
+          distanceMax: distMax ? parseFloat(distMax) * 1000 : null,
         },
       });
       setActivities(result);
