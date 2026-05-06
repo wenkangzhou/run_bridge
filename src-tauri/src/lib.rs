@@ -2,6 +2,22 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use serde::{Deserialize, Serialize};
 
+fn project_root() -> Result<PathBuf, String> {
+    let current = std::env::current_dir().map_err(|e| e.to_string())?;
+    if current.join("running_page").exists() {
+        return Ok(current);
+    }
+    let parent = current.join("..").canonicalize().map_err(|e| e.to_string())?;
+    if parent.join("running_page").exists() {
+        return Ok(parent);
+    }
+    let grandparent = current.join("../..").canonicalize().map_err(|e| e.to_string())?;
+    if grandparent.join("running_page").exists() {
+        return Ok(grandparent);
+    }
+    Err("Cannot find project root (running_page/ not found)".to_string())
+}
+
 const DB_PATH: &str = "data/runbridge.db";
 const GPX_DIR: &str = "data/gpx";
 
@@ -264,7 +280,7 @@ fn sync_codoon(
     password: String,
     use_token: bool,
 ) -> Result<String, String> {
-    let current_dir = std::env::current_dir().map_err(|e| e.to_string())?;
+    let current_dir = project_root()?;
     let script = current_dir.join("running_page/run_page/codoon_sync.py");
     if !script.exists() {
         return Err("codoon_sync.py not found".into());
@@ -306,7 +322,7 @@ fn sync_joyrun(
     code: String,
     use_sid: bool,
 ) -> Result<String, String> {
-    let current_dir = std::env::current_dir().map_err(|e| e.to_string())?;
+    let current_dir = project_root()?;
     let script = current_dir.join("running_page/run_page/joyrun_sync.py");
     if !script.exists() {
         return Err("joyrun_sync.py not found".into());
@@ -346,7 +362,7 @@ fn sync_joyrun(
 
 #[tauri::command]
 fn scan_gpx_dirs() -> Result<String, String> {
-    let current_dir = std::env::current_dir().map_err(|e| e.to_string())?;
+    let current_dir = project_root()?;
     let mut total = 0usize;
 
     // scan running_page/GPX_OUT
