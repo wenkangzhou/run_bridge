@@ -44,10 +44,18 @@ function fmtDur(sec: number | null): string {
 function fmtDate(iso: string | null): string {
   if (!iso) return "-";
   const d = new Date(iso);
-  return d.toLocaleString("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleString("zh-CN", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 // ── Sync Page ─────────────────────────────────────────────────
+
+type Account = {
+  platform: string;
+  username: string;
+  password: string;
+  use_token: boolean;
+  use_sid: boolean;
+};
 
 function SyncPage() {
   const [platform, setPlatform] = useState<"codoon" | "joyrun">("codoon");
@@ -61,6 +69,28 @@ function SyncPage() {
   const [jrPhone, setJrPhone] = useState("");
   const [jrCode, setJrCode] = useState("");
   const [jrUseSid, setJrUseSid] = useState(false);
+
+  useEffect(() => {
+    loadAccount("codoon");
+    loadAccount("joyrun");
+  }, []);
+
+  async function loadAccount(p: string) {
+    try {
+      const acc = await invoke<Account>("get_account", { platform: p });
+      if (p === "codoon") {
+        setCdMobile(acc.username);
+        setCdPassword(acc.password);
+        setCdUseToken(acc.use_token);
+      } else {
+        setJrPhone(acc.username);
+        setJrCode(acc.password);
+        setJrUseSid(acc.use_sid);
+      }
+    } catch {
+      // account not found, ignore
+    }
+  }
 
   async function handleSync() {
     setLoading(true);
@@ -79,6 +109,12 @@ function SyncPage() {
               useSid: jrUseSid,
             });
       setLog(String(result));
+      // save account after successful sync
+      if (platform === "codoon") {
+        await invoke("save_account", { platform: "codoon", username: cdMobile, password: cdPassword, useToken: cdUseToken, useSid: false });
+      } else {
+        await invoke("save_account", { platform: "joyrun", username: jrPhone, password: jrCode, useToken: false, useSid: jrUseSid });
+      }
     } catch (err) {
       setLog(String(err));
     } finally {

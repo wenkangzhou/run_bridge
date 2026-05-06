@@ -118,6 +118,18 @@ fn db_conn() -> Result<rusqlite::Connection, String> {
     )
     .map_err(|e| e.to_string())?;
 
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS accounts (
+            platform TEXT PRIMARY KEY,
+            username TEXT,
+            password TEXT,
+            use_token INTEGER DEFAULT 0,
+            use_sid INTEGER DEFAULT 0
+        )",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+
     Ok(conn)
 }
 
@@ -207,7 +219,7 @@ fn parse_gpx_file(path: &Path) -> Result<ActivityMeta, String> {
 
 // ── Import GPX from dir ───────────────────────────────────────
 
-fn import_gpx_from_dir(source: &str, dir: &Path) -> Result<Vec<Activity>, String> {
+fn import_gpx_from_dir(source: &str, dir: &Path, skip_any_source: bool) -> Result<Vec<Activity>, String> {
     let conn = db_conn()?;
     let mut imported = Vec::new();
 
@@ -226,13 +238,19 @@ fn import_gpx_from_dir(source: &str, dir: &Path) -> Result<Vec<Activity>, String
             .to_string();
         let external_id = stem.clone();
 
-        let exists: bool = conn
-            .query_row(
+        let exists = if skip_any_source {
+            conn.query_row(
+                "SELECT 1 FROM activities WHERE external_id = ?1 AND is_deleted = 0 LIMIT 1",
+                rusqlite::params![external_id],
+                |_| Ok(true),
+            ).unwrap_or(false)
+        } else {
+            conn.query_row(
                 "SELECT 1 FROM activities WHERE source = ?1 AND external_id = ?2 AND is_deleted = 0 LIMIT 1",
                 rusqlite::params![source, external_id],
                 |_| Ok(true),
-            )
-            .unwrap_or(false);
+            ).unwrap_or(false)
+        };
         if exists {
             continue;
         }
@@ -289,7 +307,7 @@ fn import_gpx_from_dir(source: &str, dir: &Path) -> Result<Vec<Activity>, String
 // ── Sync commands ─────────────────────────────────────────────
 
 #[tauri::command]
-fn sync_codoon(
+async fn sync_codoon(
     mobile: String,
     password: String,
     use_token: bool,
@@ -301,18 +319,21 @@ fn sync_codoon(
     }
 
     let python = if cfg!(target_os = "windows") { "python" } else { "python3" };
+    let work_dir = current_dir.join("running_page");
 
-    let mut cmd = Command::new(python);
-    cmd.arg(&script).current_dir(current_dir.join("running_page"));
+    let result = tokio::task::spawn_blocking(move || {
+        let mut cmd = std::process::Command::new(python);
+        cmd.arg(&script).current_dir(&work_dir);
+        if use_token {
+            cmd.arg(&mobile).arg(&password).arg("--from-auth-token");
+        } else {
+            cmd.arg(&mobile).arg(&password);
+        }
+        cmd.arg("--with-gpx");
+        cmd.output()
+    }).await.map_err(|e| e.to_string())?;
 
-    if use_token {
-        cmd.arg(&mobile).arg(&password).arg("--from-auth-token");
-    } else {
-        cmd.arg(&mobile).arg(&password);
-    }
-    cmd.arg("--with-gpx");
-
-    let output = cmd.output().map_err(|e| e.to_string())?;
+    let output = result.map_err(|e| e.to_string())?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
@@ -321,13 +342,13 @@ fn sync_codoon(
     }
 
     let gpx_dir = current_dir.join("running_page/GPX_OUT");
-    let imported = import_gpx_from_dir("codoon", &gpx_dir)?;
+    let imported = import_gpx_from_dir("codoon", &gpx_dir, false)?;
 
     Ok(format!("{}\n{}\nImported {} new activities.", stdout, stderr, imported.len()))
 }
 
 #[tauri::command]
-fn sync_joyrun(
+async fn sync_joyrun(
     phone: String,
     code: String,
     use_sid: bool,
@@ -339,18 +360,21 @@ fn sync_joyrun(
     }
 
     let python = if cfg!(target_os = "windows") { "python" } else { "python3" };
+    let work_dir = current_dir.join("running_page");
 
-    let mut cmd = Command::new(python);
-    cmd.arg(&script).current_dir(current_dir.join("running_page"));
+    let result = tokio::task::spawn_blocking(move || {
+        let mut cmd = std::process::Command::new(python);
+        cmd.arg(&script).current_dir(&work_dir);
+        if use_sid {
+            cmd.arg(&phone).arg(&code).arg("--from-uid-sid");
+        } else {
+            cmd.arg(&phone).arg(&code);
+        }
+        cmd.arg("--with-gpx");
+        cmd.output()
+    }).await.map_err(|e| e.to_string())?;
 
-    if use_sid {
-        cmd.arg(&phone).arg(&code).arg("--from-uid-sid");
-    } else {
-        cmd.arg(&phone).arg(&code);
-    }
-    cmd.arg("--with-gpx");
-
-    let output = cmd.output().map_err(|e| e.to_string())?;
+    let output = result.map_err(|e| e.to_string())?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
@@ -359,7 +383,7 @@ fn sync_joyrun(
     }
 
     let gpx_dir = current_dir.join("running_page/GPX_OUT");
-    let imported = import_gpx_from_dir("joyrun", &gpx_dir)?;
+    let imported = import_gpx_from_dir("joyrun", &gpx_dir, false)?;
 
     Ok(format!("{}\n{}\nImported {} new activities.", stdout, stderr, imported.len()))
 }
@@ -371,12 +395,12 @@ fn scan_gpx_dirs() -> Result<String, String> {
 
     let gpx_out = current_dir.join("running_page/GPX_OUT");
     if gpx_out.exists() {
-        total += import_gpx_from_dir("local", &gpx_out)?.len();
+        total += import_gpx_from_dir("local", &gpx_out, true)?.len();
     }
 
     let data_gpx = current_dir.join("data/gpx");
     if data_gpx.exists() {
-        total += import_gpx_from_dir("local", &data_gpx)?.len();
+        total += import_gpx_from_dir("local", &data_gpx, true)?.len();
     }
 
     Ok(if total > 0 {
@@ -656,6 +680,73 @@ async fn start_oauth_server(port: u16) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn save_account(
+    platform: String,
+    username: String,
+    password: String,
+    use_token: bool,
+    use_sid: bool,
+) -> Result<(), String> {
+    let conn = db_conn()?;
+    conn.execute(
+        "INSERT INTO accounts (platform, username, password, use_token, use_sid)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(platform) DO UPDATE SET
+            username = excluded.username,
+            password = excluded.password,
+            use_token = excluded.use_token,
+            use_sid = excluded.use_sid",
+        rusqlite::params![
+            platform,
+            username,
+            password,
+            if use_token { 1 } else { 0 },
+            if use_sid { 1 } else { 0 },
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Account {
+    pub platform: String,
+    pub username: String,
+    pub password: String,
+    pub use_token: bool,
+    pub use_sid: bool,
+}
+
+#[tauri::command]
+fn get_account(platform: String) -> Result<Account, String> {
+    let conn = db_conn()?;
+    let row = conn.query_row(
+        "SELECT username, password, use_token, use_sid FROM accounts WHERE platform = ?1 LIMIT 1",
+        rusqlite::params![platform],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i32>(2)?,
+                row.get::<_, i32>(3)?,
+            ))
+        },
+    );
+
+    match row {
+        Ok((username, password, use_token, use_sid)) => Ok(Account {
+            platform,
+            username,
+            password,
+            use_token: use_token != 0,
+            use_sid: use_sid != 0,
+        }),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Err("Account not found".to_string()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
 async fn authorize_strava() -> Result<String, String> {
     let config = get_strava_config()?;
     if config.client_id.is_empty() || config.client_secret.is_empty() {
@@ -881,6 +972,8 @@ pub fn run() {
             get_strava_config,
             authorize_strava,
             upload_to_strava,
+            save_account,
+            get_account,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
