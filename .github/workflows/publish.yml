@@ -135,4 +135,4 @@ jobs:
           set -e
           TAG="${{ github.ref_name }}"
           echo "=== Verifying release $TAG ==="
-          gh release view "$TAG" --json tagName,name,isDraft,assets || echo "Failed to view release"
+          gh release view "$TAG" --json tagName,name,assets
