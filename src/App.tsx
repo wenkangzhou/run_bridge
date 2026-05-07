@@ -114,12 +114,12 @@ function SyncPage() {
           ? await invoke("sync_codoon", {
               mobile: cdMobile,
               password: cdPassword,
-              use_token: cdUseToken,
+              useToken: cdUseToken,
             })
           : await invoke("sync_joyrun", {
               phone: jrPhone,
               code: jrCode,
-              use_sid: jrUseSid,
+              useSid: jrUseSid,
             });
       setLog(String(result));
     } catch (err) {

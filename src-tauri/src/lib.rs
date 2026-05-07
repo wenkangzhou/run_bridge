@@ -462,13 +462,20 @@ fn import_gpx_from_dir(source: &str, dir: &Path, skip_any_source: bool) -> Resul
 
 // ── Sync commands ─────────────────────────────────────────────
 
-#[tauri::command]
-async fn sync_codoon(
-    app: tauri::AppHandle,
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncCodoonArgs {
     mobile: String,
     password: String,
     use_token: bool,
+}
+
+#[tauri::command]
+async fn sync_codoon(
+    app: tauri::AppHandle,
+    args: SyncCodoonArgs,
 ) -> Result<String, String> {
+    let SyncCodoonArgs { mobile, password, use_token } = args;
     let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let env_vars = python_env_vars(&app_data)?;
     let gpx_dir = app_data.join("GPX_OUT");
@@ -516,13 +523,20 @@ async fn sync_codoon(
     Ok(format!("{}\n{}\nImported {} new activities.", stdout, stderr, imported.len()))
 }
 
-#[tauri::command]
-async fn sync_joyrun(
-    app: tauri::AppHandle,
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncJoyrunArgs {
     phone: String,
     code: String,
     use_sid: bool,
+}
+
+#[tauri::command]
+async fn sync_joyrun(
+    app: tauri::AppHandle,
+    args: SyncJoyrunArgs,
 ) -> Result<String, String> {
+    let SyncJoyrunArgs { phone, code, use_sid } = args;
     let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let env_vars = python_env_vars(&app_data)?;
     let gpx_dir = app_data.join("GPX_OUT");
