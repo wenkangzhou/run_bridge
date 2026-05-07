@@ -33,17 +33,32 @@ fn cancel_sync() -> Result<String, String> {
 }
 
 fn project_root() -> Result<PathBuf, String> {
-    let current = std::env::current_dir().map_err(|e| e.to_string())?;
-    if current.join("running_page").exists() {
-        return Ok(current);
+    // Release mode: use exe location to find bundled resources
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe_dir = exe.parent().ok_or("Cannot get exe dir")?;
+
+    // macOS .app bundle: Contents/MacOS/ -> Contents/Resources/
+    let resources_dir = if exe_dir.file_name() == Some(std::ffi::OsStr::new("MacOS")) {
+        exe_dir.parent().unwrap_or(exe_dir).join("Resources")
+    } else {
+        exe_dir.to_path_buf()
+    };
+
+    if resources_dir.join("running_page").exists() {
+        return Ok(resources_dir);
     }
-    let parent = current.join("..").canonicalize().map_err(|e| e.to_string())?;
-    if parent.join("running_page").exists() {
-        return Ok(parent);
-    }
-    let grandparent = current.join("../..").canonicalize().map_err(|e| e.to_string())?;
-    if grandparent.join("running_page").exists() {
-        return Ok(grandparent);
+
+    // Dev mode fallback: walk up from current_dir
+    let mut current = std::env::current_dir().map_err(|e| e.to_string())?;
+    for _ in 0..3 {
+        if current.join("running_page").exists() {
+            return Ok(current);
+        }
+        if let Some(parent) = current.parent() {
+            current = parent.to_path_buf();
+        } else {
+            break;
+        }
     }
     Err("Cannot find project root (running_page/ not found)".to_string())
 }

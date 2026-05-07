@@ -33,6 +33,9 @@
     ],
     "macOS": {
       "signingIdentity": "-"
+    },
+    "resources": {
+      "../running_page": "running_page"
     }
   },
   "plugins": {

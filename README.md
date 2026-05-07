@@ -41,7 +41,7 @@ RunBridge/
 ├── src-tauri/
 │   ├── src/lib.rs           # Rust 后端（GPX 解析、SQLite、Strava API、Python 调用）
 │   └── tauri.conf.json
-├── running_page/            # 内置 running_page Python 脚本
+├── running_page/            # 内置 running_page Python 脚本（打包时嵌入）
 │   ├── run_page/
 │   │   ├── codoon_sync.py
 │   │   ├── joyrun_sync.py
@@ -88,6 +88,20 @@ npx tauri dev
 
 ---
 
+## 本地打包
+
+```bash
+npx tauri build --ignore-version-mismatches
+```
+
+产物路径：
+- **macOS**: `src-tauri/target/release/bundle/dmg/RunBridge_0.1.0_aarch64.dmg`
+- **Windows**: `src-tauri/target/release/bundle/msi/` + `src-tauri/target/release/bundle/nsis/`
+
+> 首次打开未签名应用时，macOS 会提示"无法验证开发者"，需在**系统设置 > 隐私与安全性**中允许。
+
+---
+
 ## 使用流程
 
 ### 1. 配置 Strava（可选，如需上传）
@@ -115,28 +129,9 @@ npx tauri dev
 
 ---
 
-## 构建
+## 自动更新
 
-```bash
-npx tauri build
-```
-
----
-
-## 常见问题
-
-### `error: no such command: tauri`
-
-请使用 `npx tauri dev`，不要运行 `cargo tauri dev`。
-
-### 编译报错 `failed to read plugin permissions`
-
-清理缓存后重试：
-
-```bash
-rm -rf src-tauri/target
-npx tauri dev
-```
+应用启动时会自动检查 GitHub Release 是否有新版本，并在顶部显示更新横幅。点击即可下载安装。
 
 ---
 
