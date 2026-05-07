@@ -69,13 +69,19 @@ jobs:
           path: artifacts
           pattern: '*-bundle'
 
-      - name: list downloaded artifacts
-        run: find artifacts -type f
+      - name: debug artifacts
+        run: |
+          echo "=== Artifact directory structure ==="
+          find artifacts -type f -ls
+          echo "=== Flatten for upload ==="
+          mkdir -p upload
+          find artifacts -type f -exec cp {} upload/ \;
+          ls -la upload/
 
       - name: create release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
+          files: upload/*
           draft: true
           tag_name: ${{ github.ref_name }}
           name: 'RunBridge ${{ github.ref_name }}'
