@@ -546,6 +546,18 @@ h2 {
   cursor: not-allowed;
 }
 
+.import-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.import-or {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 .import-msg {
   margin-left: 10px;
   font-size: 13px;

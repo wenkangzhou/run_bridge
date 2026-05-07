@@ -493,13 +493,12 @@ function ImportLocalGpx({ onImport }: { onImport: () => void }) {
   const [importing, setImporting] = useState(false);
   const [msg, setMsg] = useState("");
 
-  async function handleImport() {
-    const list = paths.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
-    if (list.length === 0) return;
+  async function doImport(filePaths: string[]) {
+    if (filePaths.length === 0) return;
     setImporting(true);
     setMsg("Importing...");
     try {
-      const result = await invoke<string>("import_local_gpx", { paths: list });
+      const result = await invoke<string>("import_local_gpx", { paths: filePaths });
       setMsg(result);
       setPaths("");
       onImport();
@@ -510,12 +509,37 @@ function ImportLocalGpx({ onImport }: { onImport: () => void }) {
     }
   }
 
+  async function handleSelect() {
+    try {
+      const selected = await open({
+        multiple: true,
+        filters: [{ name: "GPX", extensions: ["gpx"] }],
+      });
+      if (selected && Array.isArray(selected)) {
+        await doImport(selected);
+      } else if (typeof selected === "string") {
+        await doImport([selected]);
+      }
+    } catch (err) {
+      setMsg(String(err));
+    }
+  }
+
+  async function handleImport() {
+    const list = paths.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
+    await doImport(list);
+  }
+
   return (
     <div className="import-box">
       <details>
         <summary>Import Local GPX</summary>
+        <div className="import-actions">
+          <button onClick={handleSelect} disabled={importing}>📁 Select GPX Files</button>
+          <span className="import-or">or paste paths below</span>
+        </div>
         <textarea rows={3} placeholder="Paste GPX file paths, one per line..." value={paths} onChange={(e) => setPaths(e.currentTarget.value)} />
-        <button onClick={handleImport} disabled={importing}>{importing ? "Importing..." : "Import"}</button>
+        <button onClick={handleImport} disabled={importing || paths.trim().length === 0}>{importing ? "Importing..." : "Import"}</button>
         {msg && <span className="import-msg">{msg}</span>}
       </details>
     </div>
