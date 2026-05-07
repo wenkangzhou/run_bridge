@@ -78,12 +78,24 @@ jobs:
           find artifacts -type f -exec cp {} upload/ \;
           ls -la upload/
 
-      - name: create release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: upload/*
-          draft: true
-          tag_name: ${{ github.ref_name }}
-          name: 'RunBridge ${{ github.ref_name }}'
-          body: 'See the assets to download and install this version.'
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: create release with gh cli
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Create draft release
+          echo "Creating release ${{ github.ref_name }}..."
+          gh release create ${{ github.ref_name }} \
+            --draft \
+            --title "RunBridge ${{ github.ref_name }}" \
+            --notes "See the assets to download and install this version."
+          
+          # Upload all files
+          for f in upload/*; do
+            if [ -f "$f" ]; then
+              echo "Uploading: $f"
+              gh release upload ${{ github.ref_name }} "$f" --clobber
+            fi
+          done
+          
+          echo "Release created and artifacts uploaded successfully!"
+          gh release view ${{ github.ref_name }}
