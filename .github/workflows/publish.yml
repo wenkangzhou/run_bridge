@@ -50,51 +50,85 @@ jobs:
             echo "path=src-tauri/target/release/bundle" >> $GITHUB_OUTPUT
           fi
 
-      - name: list bundle files
+      - name: list all bundle files
         shell: bash
-        run: find ${{ steps.bundle_path.outputs.path }} -type f
+        run: |
+          BUNDLE="${{ steps.bundle_path.outputs.path }}"
+          echo "=== Bundle path: $BUNDLE ==="
+          find "$BUNDLE" -type f -ls || echo "find failed"
+          echo "=== Directory tree ==="
+          find "$BUNDLE" -type f
 
       - name: check gh auth
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh auth status
+        run: |
+          echo "=== GH Auth Status ==="
+          gh auth status
+          echo "=== GH version ==="
+          gh --version
 
-      - name: create or update release
+      - name: list existing releases
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -x
-          gh release create ${{ github.ref_name }} \
-            --draft \
-            --title "RunBridge ${{ github.ref_name }}" \
-            --notes "See the assets to download and install this version." \
-            || echo "Release creation exit code: $?"
+          echo "=== Existing releases ==="
+          gh release list --limit 20 || echo "No releases or failed to list"
+
+      - name: create release if not exists
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="${{ github.ref_name }}"
+          echo "=== Checking if release $TAG exists ==="
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists, skipping creation"
+          else
+            echo "Creating release $TAG..."
+            gh release create "$TAG" \
+              --draft \
+              --title "RunBridge $TAG" \
+              --notes "See the assets to download and install this version."
+            echo "Release $TAG created successfully"
+          fi
 
       - name: upload bundle artifacts
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -x
+          set -e
+          TAG="${{ github.ref_name }}"
           BUNDLE="${{ steps.bundle_path.outputs.path }}"
+          echo "=== Uploading artifacts for $TAG from $BUNDLE ==="
+
+          UPLOADED=0
           for f in "$BUNDLE"/dmg/*.dmg \
                    "$BUNDLE"/macos/*.app.tar.gz \
                    "$BUNDLE"/msi/*.msi \
                    "$BUNDLE"/nsis/*.exe; do
             if [ -f "$f" ]; then
               echo "Uploading: $f"
-              gh release upload ${{ github.ref_name }} "$f" --clobber
+              gh release upload "$TAG" "$f" --clobber
+              echo "✓ Uploaded: $(basename "$f")"
+              UPLOADED=$((UPLOADED + 1))
+            else
+              echo "✗ Not found: $f"
             fi
           done
 
-      - name: verify release
-        if: matrix.platform == 'macos-latest'
+          echo "=== Total files uploaded: $UPLOADED ==="
+
+      - name: verify release assets
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -x
-          echo "Release assets:"
-          gh release view ${{ github.ref_name }} --json assets || echo "Release not found"
+          set -e
+          TAG="${{ github.ref_name }}"
+          echo "=== Verifying release $TAG ==="
+          gh release view "$TAG" --json tagName,name,draft,assets || echo "Failed to view release"

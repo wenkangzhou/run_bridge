@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import { check } from "@tauri-apps/plugin-updater";
 import "./App.css";
@@ -98,9 +99,9 @@ function SyncPage() {
     // save account immediately so credentials are remembered even if sync fails
     try {
       if (platform === "codoon") {
-        await invoke("save_account", { platform: "codoon", username: cdMobile, password: cdPassword, useToken: cdUseToken, useSid: false });
+        await invoke("save_account", { platform: "codoon", username: cdMobile, password: cdPassword, use_token: cdUseToken, use_sid: false });
       } else {
-        await invoke("save_account", { platform: "joyrun", username: jrPhone, password: jrCode, useToken: false, useSid: jrUseSid });
+        await invoke("save_account", { platform: "joyrun", username: jrPhone, password: jrCode, use_token: false, use_sid: jrUseSid });
       }
     } catch (e) {
       console.error("Failed to save account:", e);
@@ -551,9 +552,16 @@ function ImportLocalGpx({ onImport }: { onImport: () => void }) {
 function App() {
   const [view, setView] = useState<View>("activities");
   const [updateMsg, setUpdateMsg] = useState("");
+  const [appVersion, setAppVersion] = useState("");
 
   useEffect(() => {
-    async function checkUpdate() {
+    async function init() {
+      try {
+        const ver = await getVersion();
+        setAppVersion(ver);
+      } catch {
+        // ignore in dev mode
+      }
       try {
         const update = await check();
         if (update) {
@@ -563,7 +571,7 @@ function App() {
         // updater not available in dev mode, ignore
       }
     }
-    checkUpdate();
+    init();
   }, []);
 
   async function installUpdate() {
@@ -580,7 +588,7 @@ function App() {
 
   return (
     <main className="container">
-      <h1>RunBridge</h1>
+      <h1>RunBridge v{appVersion || "dev"}</h1>
       {updateMsg && (
         <div className="update-banner" onClick={installUpdate}>
           {updateMsg}
