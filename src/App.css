@@ -488,6 +488,20 @@ h2 {
   to { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 
+/* Update banner */
+.update-banner {
+  margin-bottom: 12px;
+  padding: 8px 14px;
+  background: var(--accent);
+  color: #1a1a2e;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: center;
+  animation: fadeIn 0.2s ease;
+}
+
 /* Import local GPX */
 .import-box {
   margin-bottom: 12px;

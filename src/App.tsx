@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { check } from "@tauri-apps/plugin-updater";
 import "./App.css";
 
 type Activity = {
@@ -525,10 +526,42 @@ function ImportLocalGpx({ onImport }: { onImport: () => void }) {
 
 function App() {
   const [view, setView] = useState<View>("activities");
+  const [updateMsg, setUpdateMsg] = useState("");
+
+  useEffect(() => {
+    async function checkUpdate() {
+      try {
+        const update = await check();
+        if (update) {
+          setUpdateMsg(`Update v${update.version} available. Click to install.`);
+        }
+      } catch {
+        // updater not available in dev mode, ignore
+      }
+    }
+    checkUpdate();
+  }, []);
+
+  async function installUpdate() {
+    try {
+      const update = await check();
+      if (update) {
+        setUpdateMsg("Downloading update...");
+        await update.downloadAndInstall();
+      }
+    } catch (err) {
+      setUpdateMsg("Update failed: " + String(err));
+    }
+  }
 
   return (
     <main className="container">
       <h1>RunBridge</h1>
+      {updateMsg && (
+        <div className="update-banner" onClick={installUpdate}>
+          {updateMsg}
+        </div>
+      )}
       <nav className="nav-tabs">
         <button className={view === "sync" ? "active" : ""} onClick={() => setView("sync")}>Sync</button>
         <button className={view === "activities" ? "active" : ""} onClick={() => setView("activities")}>Activities</button>

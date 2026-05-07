@@ -38,3 +38,7 @@ running_page/**/data.db-journal
 running_page/GPX_OUT/*.gpx
 running_page/TCX_OUT/*.tcx
 running_page/FIT_OUT/*.fit
+
+# Tauri updater signing keys
+src-tauri/.tauri-signing-key
+src-tauri/.tauri-signing-key.pub
