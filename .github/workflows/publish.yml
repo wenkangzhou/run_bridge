@@ -14,9 +14,9 @@ jobs:
       matrix:
         include:
           - platform: 'macos-latest'
-            args: '--target aarch64-apple-darwin'
+            args: '--ignore-version-mismatches --target aarch64-apple-darwin'
           - platform: 'windows-latest'
-            args: ''
+            args: '--ignore-version-mismatches'
 
     runs-on: ${{ matrix.platform }}
     steps:
