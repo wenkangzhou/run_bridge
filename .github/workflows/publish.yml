@@ -54,22 +54,30 @@ jobs:
         shell: bash
         run: find ${{ steps.bundle_path.outputs.path }} -type f
 
+      - name: check gh auth
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh auth status
+
       - name: create or update release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -x
           gh release create ${{ github.ref_name }} \
             --draft \
             --title "RunBridge ${{ github.ref_name }}" \
             --notes "See the assets to download and install this version." \
-            2>/dev/null || echo "Release already exists or creation failed"
+            || echo "Release creation exit code: $?"
 
       - name: upload bundle artifacts
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -x
           BUNDLE="${{ steps.bundle_path.outputs.path }}"
           for f in "$BUNDLE"/dmg/*.dmg \
                    "$BUNDLE"/macos/*.app.tar.gz \
@@ -87,5 +95,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -x
           echo "Release assets:"
           gh release view ${{ github.ref_name }} --json assets || echo "Release not found"
