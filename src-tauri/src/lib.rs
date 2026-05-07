@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::OnceLock;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tauri::Manager;
 
 const DB_PATH: &str = "data/runbridge.db";
 const GPX_DIR: &str = "data/gpx";
@@ -404,10 +405,15 @@ fn import_gpx_from_dir(source: &str, dir: &Path, skip_any_source: bool) -> Resul
 
 #[tauri::command]
 async fn sync_codoon(
+    app: tauri::AppHandle,
     mobile: String,
     password: String,
     use_token: bool,
 ) -> Result<String, String> {
+    let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let gpx_dir = app_data.join("GPX_OUT");
+    std::fs::create_dir_all(&gpx_dir).map_err(|e| e.to_string())?;
+
     let current_dir = project_root()?;
     let script = current_dir.join("running_page/run_page/codoon_sync.py");
     if !script.exists() {
@@ -417,9 +423,11 @@ async fn sync_codoon(
     let python = if cfg!(target_os = "windows") { "python" } else { "python3" };
     let work_dir = current_dir.join("running_page");
 
+    let gpx_dir_clone = gpx_dir.clone();
     let result: Result<std::process::Output, String> = tokio::task::spawn_blocking(move || {
         let mut cmd = std::process::Command::new(python);
         cmd.arg(&script).current_dir(&work_dir);
+        cmd.env("RUN_BRIDGE_GPX_FOLDER", &gpx_dir_clone);
         if use_token {
             cmd.arg(&mobile).arg(&password).arg("--from-auth-token");
         } else {
@@ -442,7 +450,6 @@ async fn sync_codoon(
         return Err(format!("Codoon sync failed (exit code: {:?})\n{}\n{}", output.status.code(), stdout, stderr));
     }
 
-    let gpx_dir = current_dir.join("running_page/GPX_OUT");
     let imported = import_gpx_from_dir("codoon", &gpx_dir, false)?;
 
     Ok(format!("{}\n{}\nImported {} new activities.", stdout, stderr, imported.len()))
@@ -450,10 +457,15 @@ async fn sync_codoon(
 
 #[tauri::command]
 async fn sync_joyrun(
+    app: tauri::AppHandle,
     phone: String,
     code: String,
     use_sid: bool,
 ) -> Result<String, String> {
+    let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let gpx_dir = app_data.join("GPX_OUT");
+    std::fs::create_dir_all(&gpx_dir).map_err(|e| e.to_string())?;
+
     let current_dir = project_root()?;
     let script = current_dir.join("running_page/run_page/joyrun_sync.py");
     if !script.exists() {
@@ -463,9 +475,11 @@ async fn sync_joyrun(
     let python = if cfg!(target_os = "windows") { "python" } else { "python3" };
     let work_dir = current_dir.join("running_page");
 
+    let gpx_dir_clone = gpx_dir.clone();
     let result: Result<std::process::Output, String> = tokio::task::spawn_blocking(move || {
         let mut cmd = std::process::Command::new(python);
         cmd.arg(&script).current_dir(&work_dir);
+        cmd.env("RUN_BRIDGE_GPX_FOLDER", &gpx_dir_clone);
         if use_sid {
             cmd.arg(&phone).arg(&code).arg("--from-uid-sid");
         } else {
@@ -488,22 +502,22 @@ async fn sync_joyrun(
         return Err(format!("Joyrun sync failed (exit code: {:?})\n{}\n{}", output.status.code(), stdout, stderr));
     }
 
-    let gpx_dir = current_dir.join("running_page/GPX_OUT");
     let imported = import_gpx_from_dir("joyrun", &gpx_dir, false)?;
 
     Ok(format!("{}\n{}\nImported {} new activities.", stdout, stderr, imported.len()))
 }
 
 #[tauri::command]
-fn scan_gpx_dirs() -> Result<String, String> {
-    let current_dir = project_root()?;
+fn scan_gpx_dirs(app: tauri::AppHandle) -> Result<String, String> {
+    let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let mut total = 0usize;
 
-    let gpx_out = current_dir.join("running_page/GPX_OUT");
+    let gpx_out = app_data.join("GPX_OUT");
     if gpx_out.exists() {
         total += import_gpx_from_dir("local", &gpx_out, true)?.len();
     }
 
+    let current_dir = project_root()?;
     let data_gpx = current_dir.join("data/gpx");
     if data_gpx.exists() {
         total += import_gpx_from_dir("local", &data_gpx, true)?.len();

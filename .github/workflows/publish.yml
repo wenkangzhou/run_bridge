@@ -6,7 +6,7 @@ on:
       - 'v*'
 
 jobs:
-  build-tauri:
+  publish-tauri:
     permissions:
       contents: write
     strategy:
@@ -14,9 +14,9 @@ jobs:
       matrix:
         include:
           - platform: 'macos-latest'
-            target: 'aarch64-apple-darwin'
+            args: '--target aarch64-apple-darwin'
           - platform: 'windows-latest'
-            target: 'x86_64-pc-windows-msvc'
+            args: ''
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -30,110 +30,19 @@ jobs:
       - name: install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
 
       - name: install frontend dependencies
         run: npm install
 
-      - name: build tauri
-        run: npm run tauri build -- --verbose --ignore-version-mismatches --target ${{ matrix.target }}
+      - uses: tauri-apps/tauri-action@v0
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-
-      - name: list artifacts
-        shell: bash
-        run: find src-tauri/target/${{ matrix.target }}/release/bundle -type f
-
-      - name: upload bundle artifact
-        uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.platform }}-bundle
-          path: |
-            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
-            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
-            src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
-            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
-
-  create-release:
-    needs: build-tauri
-    permissions:
-      contents: write
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          pattern: '*-bundle'
-
-      - name: flatten artifacts
-        run: |
-          mkdir -p upload
-          find artifacts -type f -exec cp {} upload/ \;
-          ls -la upload/
-
-      - name: create release via API
-        id: create_release
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const tag = context.ref.replace('refs/tags/', '');
-            const { data: release } = await github.rest.repos.createRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag_name: tag,
-              name: `RunBridge ${tag}`,
-              body: 'See the assets to download and install this version.',
-              draft: true
-            });
-            console.log('Release created:', release.html_url);
-            console.log('Release ID:', release.id);
-            core.setOutput('release_id', release.id);
-
-      - name: upload assets via API
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const path = require('path');
-            const tag = context.ref.replace('refs/tags/', '');
-            
-            // Get release by tag
-            const { data: release } = await github.rest.repos.getReleaseByTag({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag: tag
-            });
-            
-            const uploadDir = 'upload';
-            const files = fs.readdirSync(uploadDir);
-            
-            for (const file of files) {
-              const filePath = path.join(uploadDir, file);
-              const data = fs.readFileSync(filePath);
-              const contentType = file.endsWith('.dmg') ? 'application/x-apple-diskimage' :
-                                 file.endsWith('.msi') ? 'application/x-msi' :
-                                 file.endsWith('.exe') ? 'application/x-msdownload' :
-                                 'application/octet-stream';
-              
-              console.log(`Uploading ${file} (${data.length} bytes)...`);
-              
-              await github.rest.repos.uploadReleaseAsset({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                release_id: release.id,
-                name: file,
-                data: data,
-                headers: {
-                  'content-type': contentType,
-                  'content-length': data.length
-                }
-              });
-              
-              console.log(`Uploaded ${file}`);
-            }
-            
-            console.log('All assets uploaded successfully!');
+          tagName: ${{ github.ref_name }}
+          releaseName: 'RunBridge ${{ github.ref_name }}'
+          releaseBody: 'See the assets to download and install this version.'
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
