@@ -113,7 +113,11 @@ jobs:
                    "$BUNDLE"/nsis/*.exe; do
             if [ -f "$f" ]; then
               echo "Uploading: $f"
-              gh release upload "$TAG" "$f" --clobber
+              for i in 1 2 3; do
+                gh release upload "$TAG" "$f" --clobber && break
+                echo "Retry $i/3..."
+                sleep 5
+              done
               echo "✓ Uploaded: $(basename "$f")"
               UPLOADED=$((UPLOADED + 1))
             else

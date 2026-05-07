@@ -84,11 +84,11 @@ function SyncPage() {
       if (p === "codoon") {
         setCdMobile(acc.username);
         setCdPassword(acc.password);
-        setCdUseToken(acc.use_token);
+        setCdUseToken(acc.use_token ?? false);
       } else {
         setJrPhone(acc.username);
         setJrCode(acc.password);
-        setJrUseSid(acc.use_sid);
+        setJrUseSid(acc.use_sid ?? false);
       }
     } catch {
       // account not found, ignore
@@ -99,9 +99,9 @@ function SyncPage() {
     // save account immediately so credentials are remembered even if sync fails
     try {
       if (platform === "codoon") {
-        await invoke("save_account", { platform: "codoon", username: cdMobile, password: cdPassword, useToken: cdUseToken, useSid: false });
+        await invoke("save_account", { platform: "codoon", username: cdMobile, password: cdPassword, useToken: cdUseToken ?? false, useSid: false });
       } else {
-        await invoke("save_account", { platform: "joyrun", username: jrPhone, password: jrCode, useToken: false, useSid: jrUseSid });
+        await invoke("save_account", { platform: "joyrun", username: jrPhone, password: jrCode, useToken: false, useSid: jrUseSid ?? false });
       }
     } catch (e) {
       console.error("Failed to save account:", e);
@@ -110,18 +110,12 @@ function SyncPage() {
     setLoading(true);
     setLog("Starting sync...\n");
     try {
-      const result =
+      const args =
         platform === "codoon"
-          ? await invoke("sync_codoon", {
-              mobile: cdMobile,
-              password: cdPassword,
-              useToken: cdUseToken,
-            })
-          : await invoke("sync_joyrun", {
-              phone: jrPhone,
-              code: jrCode,
-              useSid: jrUseSid,
-            });
+          ? { mobile: cdMobile, password: cdPassword, useToken: cdUseToken ?? false }
+          : { phone: jrPhone, code: jrCode, useSid: jrUseSid ?? false };
+      console.log("invoke args:", platform, args);
+      const result = await invoke(platform === "codoon" ? "sync_codoon" : "sync_joyrun", args);
       setLog(String(result));
     } catch (err) {
       setLog(String(err));
@@ -558,7 +552,8 @@ function App() {
     async function init() {
       try {
         const ver = await getVersion();
-        setAppVersion(ver);
+        const suffix = import.meta.env.DEV ? "-dev" : "";
+        setAppVersion(ver + suffix);
       } catch {
         // ignore in dev mode
       }

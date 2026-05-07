@@ -579,6 +579,15 @@ fn scan_gpx_dirs(app: tauri::AppHandle) -> Result<String, String> {
     }
 
     let current_dir = project_root()?;
+
+    #[cfg(debug_assertions)]
+    {
+        let running_gpx = current_dir.join("running_page/GPX_OUT");
+        if running_gpx.exists() {
+            total += import_gpx_from_dir("local", &running_gpx, true)?.len();
+        }
+    }
+
     let data_gpx = current_dir.join("data/gpx");
     if data_gpx.exists() {
         total += import_gpx_from_dir("local", &data_gpx, true)?.len();
