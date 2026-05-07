@@ -1,11 +1,11 @@
 {
   "name": "runbridge",
   "private": true,
-  "version": "0.1.2",
+  "version": "0.1.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "rm -rf running_page/GPX_OUT/* running_page/TCX_OUT/* running_page/FIT_OUT/* running_page/PNG_OUT/* && tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri"
   },
