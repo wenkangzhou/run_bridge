@@ -7,11 +7,44 @@ use tokio::net::TcpListener;
 use tauri::Manager;
 
 const DB_PATH: &str = "data/runbridge.db";
-const GPX_DIR: &str = "data/gpx";
+const GPX_RELATIVE_DIR: &str = "data/gpx";
 
-// ── Project root detection ────────────────────────────────────
+// ── Writable app data dir (initialized in setup) ──────────────
 
+static APP_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 static SYNC_PID: OnceLock<Arc<Mutex<Option<u32>>>> = OnceLock::new();
+
+fn set_app_data_dir(dir: PathBuf) {
+    APP_DATA_DIR.set(dir).ok();
+}
+
+fn app_data_dir() -> Result<PathBuf, String> {
+    APP_DATA_DIR.get()
+        .cloned()
+        .ok_or_else(|| "App data dir not initialized".to_string())
+}
+
+fn gpx_storage_dir() -> Result<PathBuf, String> {
+    let dir = app_data_dir()?.join(GPX_RELATIVE_DIR);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+fn resolve_gpx_path(gpx_file: &str) -> Result<PathBuf, String> {
+    let path = Path::new(gpx_file);
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    // Try app_data_dir first (release builds / new data)
+    if let Ok(app_data) = app_data_dir() {
+        let full = app_data.join(path);
+        if full.exists() {
+            return Ok(full);
+        }
+    }
+    // Fallback to project_root (dev mode / legacy data)
+    Ok(project_root()?.join(path))
+}
 
 fn sync_pid() -> &'static Arc<Mutex<Option<u32>>> {
     SYNC_PID.get_or_init(|| Arc::new(Mutex::new(None)))
@@ -113,14 +146,12 @@ struct ActivityMeta {
 
 // ── DB helpers ────────────────────────────────────────────────
 
-fn ensure_dirs() -> Result<(), String> {
-    std::fs::create_dir_all(GPX_DIR).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
 fn db_conn() -> Result<rusqlite::Connection, String> {
-    ensure_dirs()?;
-    let conn = rusqlite::Connection::open(DB_PATH).map_err(|e| e.to_string())?;
+    let db_path = app_data_dir()?.join(DB_PATH);
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
     conn.execute(
         "CREATE TABLE IF NOT EXISTS activities (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -358,7 +389,8 @@ fn import_gpx_from_dir(source: &str, dir: &Path, skip_any_source: bool) -> Resul
         } else { source };
 
         let new_name = format!("{}_{}.gpx", detected_source, external_id);
-        let new_path = PathBuf::from(GPX_DIR).join(&new_name);
+        let target_dir = gpx_storage_dir()?;
+        let new_path = target_dir.join(&new_name);
         std::fs::copy(&path, &new_path).map_err(|e| e.to_string())?;
 
         let now = chrono::Utc::now().to_rfc3339();
@@ -393,7 +425,7 @@ fn import_gpx_from_dir(source: &str, dir: &Path, skip_any_source: bool) -> Resul
                 distance_m: meta.distance_m,
                 elevation_gain_m: meta.elevation_gain_m,
                 duration_sec: meta.duration_sec,
-                gpx_file: new_path.to_string_lossy().to_string(),
+                gpx_file: PathBuf::from(GPX_RELATIVE_DIR).join(&new_name).to_string_lossy().to_string(),
             });
         }
     }
@@ -580,7 +612,8 @@ fn import_local_gpx(paths: Vec<String>) -> Result<String, String> {
         } else { "local" };
 
         let new_name = format!("{}_{}.gpx", detected_source, external_id);
-        let new_path = PathBuf::from(GPX_DIR).join(&new_name);
+        let target_dir = gpx_storage_dir()?;
+        let new_path = target_dir.join(&new_name);
         std::fs::copy(path, &new_path).map_err(|e| e.to_string())?;
 
         let now = chrono::Utc::now().to_rfc3339();
@@ -1119,7 +1152,8 @@ fn fix_local_sources() -> Result<String, String> {
     let mut fixed = 0;
     for row in rows {
         let (id, gpx_file) = row.map_err(|e| e.to_string())?;
-        let new_source = if let Ok(file) = std::fs::File::open(&gpx_file) {
+        let gpx_path = resolve_gpx_path(&gpx_file)?;
+        let new_source = if let Ok(file) = std::fs::File::open(&gpx_path) {
             if let Ok(gpx_data) = gpx::read(file) {
                 let track_name = gpx_data.tracks.first().and_then(|t| t.name.clone()).unwrap_or_default();
                 if track_name.to_lowercase().contains("codoon") {
@@ -1166,7 +1200,7 @@ fn export_gpx(ids: Vec<i64>, output_dir: String) -> Result<String, String> {
             Err(_) => continue,
         };
 
-        let src = Path::new(&gpx_file);
+        let src = resolve_gpx_path(&gpx_file)?;
         if !src.exists() {
             continue;
         }
@@ -1187,6 +1221,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .setup(|app| {
+            set_app_data_dir(app.path().app_data_dir().map_err(|e| e.to_string())?);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             sync_codoon,
             sync_joyrun,
