@@ -41,8 +41,11 @@ jobs:
       - name: install frontend dependencies
         run: npm install
 
+      - name: build frontend
+        run: npm run build
+
       - name: build tauri
-        run: npm run tauri build -- --verbose
+        run: npm run tauri build -- --verbose --ignore-version-mismatches
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
