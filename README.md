@@ -91,11 +91,11 @@ npx tauri dev
 ## 本地打包
 
 ```bash
-npx tauri build --ignore-version-mismatches
+npx tauri build
 ```
 
 产物路径：
-- **macOS**: `src-tauri/target/release/bundle/dmg/RunBridge_0.1.0_aarch64.dmg`
+- **macOS**: `src-tauri/target/release/bundle/dmg/RunBridge_0.1.4_aarch64.dmg`
 - **Windows**: `src-tauri/target/release/bundle/msi/` + `src-tauri/target/release/bundle/nsis/`
 
 > 首次打开未签名应用时，macOS 会提示"无法验证开发者"，需在**系统设置 > 隐私与安全性**中允许。
@@ -141,4 +141,15 @@ npx tauri build --ignore-version-mismatches
 - **桌面框架**：Tauri v2
 - **后端**：Rust（`gpx`、`rusqlite`、`reqwest`、`tokio`）
 - **数据同步**：Python 3（`codoon_sync.py`、`joyrun_sync.py`）
-- **数据库**：SQLite（`data/runbridge.db`）
+- **数据库**：SQLite（`~/Library/Application Support/com.jim.runbridge/data/runbridge.db`）
+
+---
+
+## 下载安装
+
+直接从 [GitHub Releases](https://github.com/wenkangzhou/run_bridge/releases) 下载对应平台的安装包：
+
+- **macOS (Apple Silicon)**: `RunBridge_0.1.4_aarch64.dmg`
+- **Windows**: `RunBridge_0.1.4_x64-setup.exe` 或 `RunBridge_0.1.4_x64_en-US.msi`
+
+> 首次打开未签名应用时，macOS 会提示"无法验证开发者"，需在**系统设置 > 隐私与安全性**中允许。
