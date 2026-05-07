@@ -99,9 +99,9 @@ function SyncPage() {
     // save account immediately so credentials are remembered even if sync fails
     try {
       if (platform === "codoon") {
-        await invoke("save_account", { platform: "codoon", username: cdMobile, password: cdPassword, use_token: cdUseToken, use_sid: false });
+        await invoke("save_account", { platform: "codoon", username: cdMobile, password: cdPassword, useToken: cdUseToken, useSid: false });
       } else {
-        await invoke("save_account", { platform: "joyrun", username: jrPhone, password: jrCode, use_token: false, use_sid: jrUseSid });
+        await invoke("save_account", { platform: "joyrun", username: jrPhone, password: jrCode, useToken: false, useSid: jrUseSid });
       }
     } catch (e) {
       console.error("Failed to save account:", e);
@@ -115,12 +115,12 @@ function SyncPage() {
           ? await invoke("sync_codoon", {
               mobile: cdMobile,
               password: cdPassword,
-              use_token: cdUseToken,
+              useToken: cdUseToken,
             })
           : await invoke("sync_joyrun", {
               phone: jrPhone,
               code: jrCode,
-              use_sid: jrUseSid,
+              useSid: jrUseSid,
             });
       setLog(String(result));
     } catch (err) {
