@@ -30,6 +30,33 @@ fn gpx_storage_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+fn python_env_vars(app_data: &Path) -> Result<Vec<(&'static str, PathBuf)>, String> {
+    let gpx_dir = app_data.join("GPX_OUT");
+    let tcx_dir = app_data.join("TCX_OUT");
+    let fit_dir = app_data.join("FIT_OUT");
+    let png_dir = app_data.join("PNG_OUT");
+    let sql_file = app_data.join("run_page").join("data.db");
+    let json_file = app_data.join("src").join("static").join("activities.json");
+    let synced_file = app_data.join("imported.json");
+    for dir in [&gpx_dir, &tcx_dir, &fit_dir, &png_dir] {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    for path in [&sql_file, &json_file, &synced_file] {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(vec![
+        ("RUN_BRIDGE_GPX_FOLDER", gpx_dir),
+        ("RUN_BRIDGE_TCX_FOLDER", tcx_dir),
+        ("RUN_BRIDGE_FIT_FOLDER", fit_dir),
+        ("RUN_BRIDGE_PNG_FOLDER", png_dir),
+        ("RUN_BRIDGE_SQL_FILE", sql_file),
+        ("RUN_BRIDGE_JSON_FILE", json_file),
+        ("RUN_BRIDGE_SYNCED_FILE", synced_file),
+    ])
+}
+
 fn resolve_gpx_path(gpx_file: &str) -> Result<PathBuf, String> {
     let path = Path::new(gpx_file);
     if path.is_absolute() {
@@ -443,8 +470,8 @@ async fn sync_codoon(
     use_token: bool,
 ) -> Result<String, String> {
     let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let env_vars = python_env_vars(&app_data)?;
     let gpx_dir = app_data.join("GPX_OUT");
-    std::fs::create_dir_all(&gpx_dir).map_err(|e| e.to_string())?;
 
     let current_dir = project_root()?;
     let script = current_dir.join("running_page/run_page/codoon_sync.py");
@@ -455,11 +482,13 @@ async fn sync_codoon(
     let python = if cfg!(target_os = "windows") { "python" } else { "python3" };
     let work_dir = current_dir.join("running_page");
 
-    let gpx_dir_clone = gpx_dir.clone();
+    let env_vars_clone = env_vars.clone();
     let result: Result<std::process::Output, String> = tokio::task::spawn_blocking(move || {
         let mut cmd = std::process::Command::new(python);
         cmd.arg(&script).current_dir(&work_dir);
-        cmd.env("RUN_BRIDGE_GPX_FOLDER", &gpx_dir_clone);
+        for (key, value) in env_vars_clone {
+            cmd.env(key, value);
+        }
         if use_token {
             cmd.arg(&mobile).arg(&password).arg("--from-auth-token");
         } else {
@@ -495,8 +524,8 @@ async fn sync_joyrun(
     use_sid: bool,
 ) -> Result<String, String> {
     let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let env_vars = python_env_vars(&app_data)?;
     let gpx_dir = app_data.join("GPX_OUT");
-    std::fs::create_dir_all(&gpx_dir).map_err(|e| e.to_string())?;
 
     let current_dir = project_root()?;
     let script = current_dir.join("running_page/run_page/joyrun_sync.py");
@@ -507,11 +536,13 @@ async fn sync_joyrun(
     let python = if cfg!(target_os = "windows") { "python" } else { "python3" };
     let work_dir = current_dir.join("running_page");
 
-    let gpx_dir_clone = gpx_dir.clone();
+    let env_vars_clone = env_vars.clone();
     let result: Result<std::process::Output, String> = tokio::task::spawn_blocking(move || {
         let mut cmd = std::process::Command::new(python);
         cmd.arg(&script).current_dir(&work_dir);
-        cmd.env("RUN_BRIDGE_GPX_FOLDER", &gpx_dir_clone);
+        for (key, value) in env_vars_clone {
+            cmd.env(key, value);
+        }
         if use_sid {
             cmd.arg(&phone).arg(&code).arg("--from-uid-sid");
         } else {
